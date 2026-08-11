@@ -125,6 +125,8 @@ btnReset.addEventListener('click', () => {
     if (toggleStd1) toggleStd1.checked = true;
     if (toggleStd2) toggleStd2.checked = true;
     if (toggleScree) toggleScree.checked = false;
+    const toggleElbow = document.getElementById('show-elbow-plot');
+    if (toggleElbow) toggleElbow.checked = false;
     if (toggleLoadings) toggleLoadings.checked = false;
     
     const showVectorsCb = document.getElementById('show-vectors');
@@ -136,6 +138,8 @@ btnReset.addEventListener('click', () => {
     
     const screeContainer = document.getElementById('scree-container');
     if (screeContainer) screeContainer.classList.add('hidden');
+    const elbowContainer = document.getElementById('elbow-container');
+    if (elbowContainer) elbowContainer.classList.add('hidden');
     const loadingsContainer = document.getElementById('loadings-container');
     if (loadingsContainer) loadingsContainer.classList.add('hidden');
     globalData = null;
@@ -185,6 +189,10 @@ if (toggleStd2) toggleStd2.addEventListener('change', handleStandardizeToggle);
 const toggleScree = document.getElementById('show-scree-plot');
 if (toggleScree) {
     toggleScree.addEventListener('change', () => renderScreePlot());
+}
+const toggleElbow = document.getElementById('show-elbow-plot');
+if (toggleElbow) {
+    toggleElbow.addEventListener('change', () => renderElbowPlot());
 }
 const toggleLoadings = document.getElementById('show-loadings-chart');
 if (toggleLoadings) {
@@ -691,7 +699,7 @@ function calculateWCSS(data, clusters, k) {
 }
 
 function determineOptimalK(data) {
-    if(data.length < 4) return 1;
+    if(data.length < 4) return { optimalK: 1, wcss: [0] };
     let wcss = [];
     let maxK = Math.min(10, data.length - 1);
     for(let k = 1; k <= maxK; k++) {
@@ -711,7 +719,8 @@ function determineOptimalK(data) {
             if(d2 > maxDiff) { maxDiff = d2; bestK = i+1; }
         }
     }
-    return Math.max(1, Math.min(bestK, 5));
+    const finalK = Math.max(1, Math.min(bestK, 5));
+    return { optimalK: finalK, wcss: wcss };
 }
 
 
@@ -760,7 +769,8 @@ function runPCA() {
             }
         }
         
-        const optimalK = determineOptimalK(X);
+        const optKInfo = determineOptimalK(X);
+        const optimalK = optKInfo.optimalK;
         clusterCount.value = optimalK;
         const clusterValSpan = document.getElementById('cluster-value');
         if (clusterValSpan) clusterValSpan.textContent = optimalK;
@@ -773,7 +783,9 @@ function runPCA() {
             loadings: factorLoadings,
             explainedVar: explainedVar,
             eigenValues: eigenValues,
-            clusters: initialClusters
+            clusters: initialClusters,
+            optimalK: optimalK,
+            wcss: optKInfo.wcss
         };
         
         setupSelects(p);
@@ -785,6 +797,7 @@ function runPCA() {
         // Render charts once
         updatePlot();
         renderScreePlot();
+        renderElbowPlot();
         renderLoadingsChart();
         
     } catch (e) {
@@ -1064,6 +1077,29 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
         ? "<span style='color: var(--primary); font-weight: 600;'>※ Z得点による標準化データを使用</span>" 
         : "<span style='color: var(--text-muted); font-weight: 600;'>※ 標準化なし（生データ）を使用</span>";
         
+    let pcaInsightText = "";
+    let clusterInsightText = "";
+    
+    if (pcaResult) {
+        const ev = pcaResult.eigenValues;
+        const totalVar = ev.reduce((a, b) => a + b, 0);
+        let cum = 0;
+        const cumRatios = ev.map(v => { cum += (v / totalVar) * 100; return cum; });
+        
+        const kaiserCount = ev.filter(v => v >= 1.0).length || 1;
+        const kaiserCum = cumRatios[kaiserCount - 1].toFixed(1);
+        pcaInsightText = `<p style="margin-top: 0.75rem; background: #eff6ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #3b82f6; font-size: 0.9em;">
+            <strong>📐 次元（主成分数）判定の根拠:</strong><br>
+            カイザー基準（固有値 ≥ 1.0）により <strong>PC1〜PC${kaiserCount} (${kaiserCount}次元)</strong> の採用を推奨（累積寄与率: <strong>${kaiserCum}%</strong>）。
+        </p>`;
+        
+        const optK = pcaResult.optimalK || 1;
+        clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
+            <strong>🎯 クラスタ数判定の根拠:</strong><br>
+            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、最適分割数 <strong>K = ${optK}</strong> を自動決定。
+        </p>`;
+    }
+
     summaryText.innerHTML = `
         <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${stdText}</p>
         <p><strong>第${xIdx+1}主成分 (横軸)</strong> は、全体のデータの <strong>${varX}%</strong> の情報を説明しています。<br>
@@ -1071,7 +1107,9 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
         <p style="margin-top: 0.5rem;"><strong>第${yIdx+1}主成分 (縦軸)</strong> は、全体の <strong>${varY}%</strong> の情報を説明しています。<br>
         この軸は主に <strong>「${topY}」</strong> の影響を強く受けています。</p>
         <p style="margin-top: 0.5rem;">2つの軸を合わせることで、全体の <strong>${(parseFloat(varX) + parseFloat(varY)).toFixed(1)}%</strong> の情報を一枚の図で表現できています。</p>
-        <p style="margin-top: 1rem;"><small style="color: var(--text-muted);">※赤い矢印（ベクトル）が長いほど、その変数がその方向に強く影響していることを示します。データ点は類似性に基づいて自動的にクラスタリングされています。</small></p>
+        ${pcaInsightText}
+        ${clusterInsightText}
+        <p style="margin-top: 1rem;"><small style="color: var(--text-muted);">※赤い矢印（ベクトル）が長いほど、その変数がその方向に強く影響していることを示します。</small></p>
     `;
 }
 
@@ -1317,41 +1355,179 @@ function renderScreePlot() {
     
     const xLabels = eigenValues.map((_, i) => `PC${i+1}`);
     
+    const kaiserCount = eigenValues.filter(v => v >= 1.0).length || 1;
+    let cum80Count = cumRatios.findIndex(c => c >= 80) + 1;
+    if (cum80Count === 0) cum80Count = eigenValues.length;
+    
+    // 固有値 (右肩下がりの主成分固有値プロット: 教科書の標準スタイル)
+    const traceEigen = {
+        x: xLabels,
+        y: eigenValues,
+        name: '固有値 (Eigenvalue)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#1d4ed8', width: 3 },
+        marker: { color: '#1d4ed8', size: 8 },
+        yaxis: 'y',
+        customdata: varRatios,
+        hovertemplate: '<b>%{x}</b><br>固有値: %{y:.3f}<br>寄与率: %{customdata:.2f}%<extra></extra>'
+    };
+    
+    // 個別寄与率 (%) (背景の棒グラフ)
     const traceBar = {
         x: xLabels,
         y: varRatios,
-        name: '寄与率 (%)',
+        name: '個別寄与率 (%)',
         type: 'bar',
-        marker: { color: '#3b82f6' }
+        marker: { color: 'rgba(59, 130, 246, 0.35)' },
+        yaxis: 'y2',
+        hovertemplate: '<b>%{x}</b><br>個別寄与率: %{y:.2f}%<extra></extra>'
     };
     
-    const traceLine = {
+    // 累積寄与率 (%) (右肩上がりの点線)
+    const traceCum = {
         x: xLabels,
         y: cumRatios,
         name: '累積寄与率 (%)',
         type: 'scatter',
         mode: 'lines+markers',
+        line: { color: '#dc2626', width: 2, dash: 'dot' },
+        marker: { color: '#dc2626', size: 6 },
         yaxis: 'y2',
-        line: { color: '#ef4444', width: 2 }
+        hovertemplate: '<b>%{x}</b><br>累積寄与率: %{y:.2f}%<extra></extra>'
+    };
+
+    // カイザー基準線 (固有値 = 1.0)
+    const traceKaiser = {
+        x: [xLabels[0], xLabels[xLabels.length - 1]],
+        y: [1.0, 1.0],
+        name: 'カイザー基準線 (固有値=1.0)',
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: '#d97706', width: 1.5, dash: 'dash' },
+        hoverinfo: 'none',
+        yaxis: 'y'
+    };
+
+    // 累積寄与率 80% 目標線
+    const traceCum80 = {
+        x: [xLabels[0], xLabels[xLabels.length - 1]],
+        y: [80, 80],
+        name: '累積寄与率 80%目標線',
+        type: 'scatter',
+        mode: 'lines',
+        line: { color: '#10b981', width: 1.5, dash: 'dot' },
+        hoverinfo: 'none',
+        yaxis: 'y2'
     };
     
+    const maxEigen = Math.max(...eigenValues);
     const layout = {
-        title: { text: '主成分のスクリープロット (寄与率 & 累積寄与率)', font: { size: 14 } },
-        height: 420,
+        title: { text: '主成分のスクリープロット (次元・主成分数決定の判定根拠)', font: { size: 15 } },
+        height: 450,
         xaxis: { title: '主成分' },
-        yaxis: { title: '寄与率 (%)', range: [0, Math.max(...varRatios) * 1.15] },
+        yaxis: {
+            title: '固有値 (Eigenvalue)',
+            range: [0, Math.max(maxEigen * 1.15, 1.25)],
+            zeroline: true
+        },
         yaxis2: {
-            title: '累積寄与率 (%)',
+            title: '寄与率 / 累積寄与率 (%)',
             overlaying: 'y',
             side: 'right',
-            range: [0, 105]
+            range: [0, 105],
+            showgrid: false
         },
         margin: { l: 60, r: 60, t: 60, b: 80 },
         showlegend: true,
-        legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.25 }
+        legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.25 },
+        annotations: [
+            {
+                x: xLabels[Math.min(kaiserCount - 1, xLabels.length - 1)],
+                y: eigenValues[Math.min(kaiserCount - 1, eigenValues.length - 1)],
+                xref: 'x',
+                yref: 'y',
+                text: `💡 カイザー基準適合: PC1〜PC${kaiserCount}<br>(固有値 ≥ 1.0 達成)`,
+                showarrow: true,
+                arrowhead: 2,
+                ax: 40,
+                ay: -35,
+                bgcolor: 'rgba(239, 246, 255, 0.95)',
+                bordercolor: '#2563eb',
+                borderwidth: 1,
+                font: { size: 11, color: '#1e40af' }
+            }
+        ]
     };
     
-    Plotly.newPlot('scree-container', [traceBar, traceLine], layout, {responsive: true, displaylogo: false});
+    Plotly.newPlot('scree-container', [traceBar, traceEigen, traceCum, traceKaiser, traceCum80], layout, {responsive: true, displaylogo: false});
+}
+
+function renderElbowPlot() {
+    const container = document.getElementById('elbow-container');
+    const toggle = document.getElementById('show-elbow-plot');
+    if (!container || !toggle) return;
+    
+    if (!toggle.checked || !pcaResult || !pcaResult.wcss) {
+        container.classList.add('hidden');
+        return;
+    }
+    container.classList.remove('hidden');
+    
+    const wcss = pcaResult.wcss;
+    const optimalK = pcaResult.optimalK || 1;
+    const kLabels = wcss.map((_, i) => `K=${i+1}`);
+    
+    const traceWcss = {
+        x: kLabels,
+        y: wcss,
+        name: 'クラスタ内分散和 (WCSS)',
+        type: 'scatter',
+        mode: 'lines+markers',
+        line: { color: '#8b5cf6', width: 3 },
+        marker: { color: '#8b5cf6', size: 8 },
+        hovertemplate: '<b>%{x}</b><br>WCSS: %{y:.2f}<extra></extra>'
+    };
+    
+    const optIdx = Math.min(optimalK - 1, wcss.length - 1);
+    const traceOpt = {
+        x: [kLabels[optIdx]],
+        y: [wcss[optIdx]],
+        name: `最適クラスタ数 (K=${optimalK})`,
+        type: 'scatter',
+        mode: 'markers',
+        marker: { color: '#f59e0b', size: 16, symbol: 'star' },
+        hovertemplate: `<b>★ 最適クラスタ数 K=${optimalK}</b><br>エルボー判定点<extra></extra>`
+    };
+    
+    const layout = {
+        title: { text: `クラスタ数決定プロット (エルボー法 / WCSS分析) - 最適 K = ${optimalK}`, font: { size: 15 } },
+        height: 430,
+        xaxis: { title: 'クラスタ数 (K)' },
+        yaxis: { title: 'クラスタ内分散和 (WCSS)', zeroline: false },
+        margin: { l: 60, r: 60, t: 60, b: 80 },
+        showlegend: true,
+        legend: { orientation: 'h', x: 0.5, xanchor: 'center', y: -0.25 },
+        annotations: [
+            {
+                x: kLabels[optIdx],
+                y: wcss[optIdx],
+                xref: 'x',
+                yref: 'y',
+                text: `🎯 最適クラスタ数 K=${optimalK}<br>(歪みの減衰率が最大となるエルボー点)`,
+                showarrow: true,
+                arrowhead: 2,
+                ax: 45,
+                ay: -40,
+                bgcolor: 'rgba(250, 245, 255, 0.95)',
+                bordercolor: '#8b5cf6',
+                borderwidth: 1,
+                font: { size: 12, color: '#6b21a8' }
+            }
+        ]
+    };
+    
+    Plotly.newPlot('elbow-container', [traceWcss, traceOpt], layout, {responsive: true, displaylogo: false});
 }
 
 function renderLoadingsChart() {

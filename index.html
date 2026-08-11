@@ -149,7 +149,11 @@
                         <hr style="margin: 0.75rem 0; border: none; border-top: 1px solid var(--border);">
                         <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
                             <input type="checkbox" id="show-scree-plot" style="margin-right: 0.5rem; width: auto;">
-                            スクリープロット (寄与率) を表示
+                            スクリープロット (主成分数の判定根拠) を表示
+                        </label>
+                        <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
+                            <input type="checkbox" id="show-elbow-plot" style="margin-right: 0.5rem; width: auto;">
+                            クラスタ数決定プロット (エルボー法) を表示
                         </label>
                         <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal;">
                             <input type="checkbox" id="show-loadings-chart" style="margin-right: 0.5rem; width: auto;">
@@ -178,6 +182,7 @@
                     </div>
 
                     <div id="scree-container" class="panel hidden" style="margin-top: 1.5rem; padding: 1rem; width: 100%; min-height: 400px; box-sizing: border-box;"></div>
+                    <div id="elbow-container" class="panel hidden" style="margin-top: 1.5rem; padding: 1rem; width: 100%; min-height: 400px; box-sizing: border-box;"></div>
                     <div id="loadings-container" class="panel hidden" style="margin-top: 1.5rem; padding: 1rem; width: 100%; min-height: 400px; box-sizing: border-box;"></div>
                 </div>
             </div>
