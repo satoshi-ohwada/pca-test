@@ -183,3 +183,46 @@ input[type="range"] {
     margin-top: 1rem;
     justify-content: flex-end;
 }
+
+.btn-toggle {
+    padding: 0.4rem 0.85rem;
+    font-size: 0.85rem;
+    font-weight: 500;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background: transparent;
+    color: var(--text-muted);
+    transition: all 0.2s ease;
+}
+
+.btn-toggle:hover {
+    color: var(--text-main);
+}
+
+.btn-toggle.active {
+    background: white;
+    color: var(--primary);
+    font-weight: 600;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+}
+
+.sample-checkbox-label {
+    transition: background-color 0.15s ease;
+    padding: 0.2rem 0.4rem;
+    border-radius: 4px;
+}
+
+.sample-checkbox-label:hover {
+    background-color: #f1f5f9;
+}
+
+#sample-checkboxes-container::-webkit-scrollbar {
+    width: 6px;
+}
+
+#sample-checkboxes-container::-webkit-scrollbar-thumb {
+    background-color: #cbd5e1;
+    border-radius: 4px;
+}
+

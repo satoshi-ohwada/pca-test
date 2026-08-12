@@ -14,9 +14,46 @@
     <script src="lib/xlsx.full.min.js"></script>
     <script src="lib/plotly.min.js"></script>
     <script src="lib/numeric.min.js"></script>
-    <script src="js/sample_data.js"></script>
+    <script src="js/sample_data.js?v=2"></script>
 </head>
 <body>
+    <div id="error-overlay" style="display:none; position:fixed; top:0; left:0; width:100%; z-index:9999; background:rgba(220,38,38,0.95); color:white; padding:1rem; font-family:monospace; box-sizing:border-box; max-height: 50vh; overflow-y: auto;">
+        <h3>⚠️ 致命的なエラーが発生しました</h3>
+        <p>以下のエラー内容をアシスタントにお伝えください：</p>
+        <pre id="error-overlay-text" style="white-space:pre-wrap; font-size: 0.85rem; margin-top: 0.5rem;"></pre>
+        <button onclick="document.getElementById('error-overlay').style.display='none'" style="margin-top: 1rem; padding: 0.5rem 1rem; background: white; color: #dc2626; border: none; border-radius: 4px; cursor: pointer; font-weight: bold;">閉じる</button>
+    </div>
+    <script>
+        window.addEventListener('error', function(e) {
+            const overlay = document.getElementById('error-overlay');
+            const text = document.getElementById('error-overlay-text');
+            if (overlay && text) {
+                overlay.style.display = 'block';
+                text.textContent += '\n[' + new Date().toLocaleTimeString() + '] ' + e.message + ' at ' + e.filename + ':' + e.lineno + ':' + e.colno + '\n' + (e.error && e.error.stack ? e.error.stack : '');
+            }
+        });
+        window.addEventListener('unhandledrejection', function(e) {
+            const overlay = document.getElementById('error-overlay');
+            const text = document.getElementById('error-overlay-text');
+            if (overlay && text) {
+                overlay.style.display = 'block';
+                text.textContent += '\n[' + new Date().toLocaleTimeString() + '] Unhandled Promise Rejection: ' + (e.reason && e.reason.stack ? e.reason.stack : e.reason);
+            }
+        });
+        
+        // Override console.error
+        const originalConsoleError = console.error;
+        console.error = function() {
+            originalConsoleError.apply(console, arguments);
+            const overlay = document.getElementById('error-overlay');
+            const text = document.getElementById('error-overlay-text');
+            if (overlay && text) {
+                overlay.style.display = 'block';
+                const msg = Array.from(arguments).map(arg => typeof arg === 'object' && arg ? (arg.stack || JSON.stringify(arg)) : String(arg)).join(' ');
+                text.textContent += '\n[' + new Date().toLocaleTimeString() + '] console.error: ' + msg;
+            }
+        };
+    </script>
     <div class="container">
         <header>
             <h1>簡易主成分分析（PCA）ツール</h1>
@@ -27,10 +64,10 @@
             <h2>1. データセット・インポート</h2>
             <p class="subtitle" style="margin-bottom: 1rem;">分析対象のデータセット（ExcelまたはCSV）をアップロードしてください。最初の列はラベル（都市名など）として扱われます。</p>
             
-            <div id="drop-zone" class="upload-area">
+            <div id="drop-zone" class="upload-area" style="position: relative; cursor: pointer;">
+                <input type="file" id="file-input" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; z-index: 5;" accept=".csv, .xlsx, .xls">
                 <p>ここにファイルをドロップするか、クリックしてファイルを選択してください</p>
                 <p style="font-size: 0.9em; color: var(--text-muted); margin-top: 0.5rem;">対応形式: .csv, .xlsx, .xls</p>
-                <input type="file" id="file-input" class="hidden" accept=".csv, .xlsx, .xls">
             </div>
             
             <div style="margin-top: 1.25rem; border-top: 1px dashed var(--border); padding-top: 1.25rem;">
@@ -49,26 +86,39 @@
 
             <div id="data-preview" class="hidden">
                 <h3>データセット・プレビュー</h3>
-                <div style="display: flex; gap: 1.5rem; margin-bottom: 1rem; flex-wrap: wrap;">
+                <div style="display: flex; gap: 1.5rem; margin-bottom: 1rem; flex-wrap: wrap; align-items: center;">
                     <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal;">
                         <input type="checkbox" id="show-all-data" style="margin-right: 0.5rem; width: auto;">
                         プレビューを全件表示する
                     </label>
-                    <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal;">
-                        <input type="checkbox" id="standardize-step1" checked style="margin-right: 0.5rem; width: auto;">
-                        データを標準化する (Z-Score)
-                    </label>
                 </div>
+
+                <!-- Business-Friendly Data Transformation Panel -->
+                <div style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 1.25rem; margin-bottom: 1.5rem;">
+                    <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
+                        <label for="transform-mode-select" style="font-weight: 600; font-size: 0.95rem; display: flex; align-items: center; gap: 0.4rem;">
+                            🛠️ データ補正・変換モード (前処理)
+                        </label>
+                        <span id="transform-badge" style="font-size: 0.8rem; background: #e0e7ff; color: #3730a3; padding: 0.25rem 0.75rem; border-radius: 12px; font-weight: 600;">✨ 標準化 (Z-Score) 適用中</span>
+                    </div>
+                    <select id="transform-mode-select" class="form-select" style="width: 100%; padding: 0.6rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.9rem; background-color: white;">
+                        <option value="std" selected>✨ 標準化 (Z-Score) [推奨] - 単位や桁数を自動で揃える (標準的)</option>
+                        <option value="log">📈 対数変換 + 標準化 - 売上や金額など、一部の巨大な桁(高値)の影響を丸める</option>
+                        <option value="robust">🛡️ ロバスト標準化 (Median/IQR) - 特異な外れ値の影響を自動で和らげる</option>
+                        <option value="none">直値 (変換なし) - 元の測定値をそのまま使用する</option>
+                    </select>
+                    <p id="transform-hint" style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;">
+                        💡 <b>標準化 (Z-Score)</b>: 平均を0、標準偏差を1に揃え、変数ごとの単位差（例：金額と人数）による影響をなくします。
+                    </p>
+                </div>
+
                 <div style="overflow-x: auto; max-height: 400px; margin-bottom: 2rem; border-bottom: 1px solid var(--border);">
                     <table id="preview-table">
                         <thead></thead>
                         <tbody></tbody>
                     </table>
                 </div>
-                
-                <div id="diagnosis-card" style="margin-top: 1.5rem; background-color: #f8fafc; border-left: 4px solid var(--primary); padding: 1.25rem; border-radius: 6px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
-                    <!-- Generated by JS -->
-                </div>
+
 
                 <div id="stats-preview" style="margin-top: 1.5rem;">
                     <h3>基本統計量 (Descriptive Statistics)</h3>
@@ -81,10 +131,79 @@
                     </table>
                 </div>
 
-                <div id="splom-preview" style="margin-top: 2rem;">
-                    <h3>変数間の関係マップ (散布図行列)</h3>
-                    <p style="font-size: 0.9em; color: var(--text-muted); margin-bottom: 1rem;">変数間の相関や外れ値をPCA実行前に視覚的に確認できます。</p>
-                    <div id="splom-container" style="min-height: 600px; width: 100%;"></div>
+                <div id="eda-visualizations" style="margin-top: 2rem; display: flex; flex-direction: column; gap: 2rem;">
+                    <!-- Outlier & Boxplot Analysis -->
+                    <div id="boxplot-preview" class="panel" style="padding: 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 0.5rem; margin-bottom: 0.5rem;">
+                            <h3 style="margin: 0;">📦 外れ値・データ分布の検証 (箱ひげ図 Boxplot)</h3>
+                            <span id="sample-count-badge" style="font-size: 0.85rem; background: #f1f5f9; color: #334155; padding: 0.25rem 0.75rem; border-radius: 20px; border: 1px solid #cbd5e1; font-weight: 600;">全 -- サンプル分析対象</span>
+                        </div>
+                        <p style="font-size: 0.9em; color: var(--text-muted); margin-bottom: 0.75rem;">各変数の四分位範囲 (IQR) と外れ値の有無をプロットします。赤点の外れ値はPCA結果を大きく歪ませる可能性があるため、ワンクリックで除外できます。</p>
+
+                        
+                        <!-- Quick Action Buttons for Outlier Removal -->
+                        <div style="display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; margin-bottom: 1rem; padding: 0.75rem; background: #f8fafc; border: 1px solid var(--border); border-radius: 8px;">
+                            <button id="btn-exclude-outliers" class="btn" style="background-color: #ef4444; font-size: 0.85rem; padding: 0.45rem 1rem;">⚡ 検出された外れ値サンプルを一括除外</button>
+                            <button id="btn-reset-sample-exclusion" class="btn" style="background-color: var(--text-muted); font-size: 0.85rem; padding: 0.45rem 1rem;">🔄 全サンプルを分析対象に戻す</button>
+                            <button id="btn-toggle-sample-panel" class="btn" style="background-color: #3b82f6; font-size: 0.85rem; padding: 0.45rem 1rem; margin-left: auto;">🎯 サンプルの個別選択 (ON/OFF)</button>
+                        </div>
+                        
+                        <!-- Collapsible Sample Selection Panel -->
+                        <div id="sample-selection-panel" class="hidden" style="margin-bottom: 1rem; padding: 1rem; border: 1px solid #93c5fd; background: #eff6ff; border-radius: 8px;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.6rem; flex-wrap: wrap; gap: 0.5rem;">
+                                <h4 style="margin: 0; font-size: 0.95rem; color: #1e40af;">🎯 分析対象サンプルの選択（チェックを外すと除外）</h4>
+                                <input type="text" id="sample-search-input" placeholder="サンプル名（都市名など）で検索..." style="padding: 0.35rem 0.75rem; border-radius: 6px; border: 1px solid #cbd5e1; font-size: 0.85rem; width: 220px;">
+                            </div>
+                            <div id="sample-checkboxes-container" style="display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 0.4rem; max-height: 200px; overflow-y: auto; background: white; padding: 0.65rem; border-radius: 6px; border: 1px solid #dbeafe;">
+                                <!-- Generated by JS -->
+                            </div>
+                        </div>
+
+                        <div id="boxplot-container" style="min-height: 420px; width: 100%; margin-bottom: 1rem;"></div>
+
+                        <div id="boxplot-insight" style="margin-bottom: 1rem; font-size: 0.9em; padding: 0.75rem 1rem; border-radius: 6px;"></div>
+                    </div>
+
+                    <!-- Relationship Analysis (Heatmap / Pairplot switcher) -->
+                    <div id="relationship-preview" class="panel" style="padding: 1.25rem;">
+                        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 1rem; margin-bottom: 0.75rem;">
+                            <h3 style="margin: 0;">🔗 変数間の関係分析 (Pairwise Relationship)</h3>
+                            <div style="display: flex; gap: 0.25rem; background: #e2e8f0; padding: 0.25rem; border-radius: 8px;">
+                                <button id="btn-view-heatmap" class="btn-toggle active">🔥 相関係数ヒートマップ (標準)</button>
+                                <button id="btn-view-splom" class="btn-toggle">🗺️ 散布図行列 (ペアプロット)</button>
+                            </div>
+                        </div>
+
+                        <!-- Business-Friendly Correlation Method Selector -->
+                        <div style="display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 0.75rem; margin-bottom: 1rem; background: #f8fafc; padding: 0.75rem 1rem; border-radius: 8px; border: 1px solid var(--border);">
+                            <div style="display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap;">
+                                <span style="font-size: 0.88rem; font-weight: 600; color: var(--text-main);">相関の計算方法:</span>
+                                <label style="font-size: 0.88rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem;">
+                                    <input type="radio" name="corr-method" value="pearson" checked style="width: auto;">
+                                    通常相関 (ピアソン) <span style="font-size: 0.78rem; color: var(--text-muted);">(標準的・直線的パターン)</span>
+                                </label>
+                                <label style="font-size: 0.88rem; cursor: pointer; display: flex; align-items: center; gap: 0.35rem;">
+                                    <input type="radio" name="corr-method" value="spearman" style="width: auto;">
+                                    🛡️ 順位相関 (スピアマン) <span style="font-size: 0.78rem; color: #2563eb; font-weight: 600;">(外れ値の影響を受けにくくおすすめ)</span>
+                                </label>
+                            </div>
+                        </div>
+                        
+                        <div id="heatmap-view-wrapper">
+                            <p style="font-size: 0.9em; color: var(--text-muted); margin-bottom: 0.4rem;">全変数間の相関係数をカラーマップで一覧表示します。濃い赤（強い正の相関）や濃い青（強い負の相関）の変数ペアは、同じ主成分にまとめられやすい傾向があります。</p>
+                            <p style="font-size: 0.8em; color: var(--text-muted); margin-bottom: 1rem;">※アスタリスクは有意水準（p値）を表します: *** p&lt;0.001, ** p&lt;0.01, * p&lt;0.05, . p&lt;0.1</p>
+                            <div id="heatmap-container" style="min-height: 400px; width: 100%;"></div>
+                        </div>
+                        
+                        <div id="splom-view-wrapper" class="hidden">
+                            <p style="font-size: 0.9em; color: var(--text-muted); margin-bottom: 1rem;">対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数と検定スター（p値）を表示します。</p>
+                            <div id="splom-container" style="min-height: 580px; width: 100%;"></div>
+                        </div>
+
+                        <div id="diagnosis-card" style="margin-top: 1.5rem; background-color: #f8fafc; border-left: 4px solid var(--primary); padding: 1.25rem; border-radius: 6px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);">
+                            <!-- Generated by JS -->
+                        </div>
+                    </div>
                 </div>
 
                 <div style="margin-top: 2rem; text-align: right; padding-top: 1rem; border-top: 1px solid var(--border);">
@@ -130,10 +249,13 @@
                     </div>
                     
                     <div class="control-group" style="margin-top: 1rem;">
-                        <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
-                            <input type="checkbox" id="standardize-step2" checked style="margin-right: 0.5rem; width: auto;">
-                            データの標準化 (Z-Score)
-                        </label>
+                        <label for="transform-mode-select-step2" style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem;">🛠️ データ補正・変換モード</label>
+                        <select id="transform-mode-select-step2" class="form-select" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; margin-bottom: 0.75rem;">
+                            <option value="std">✨ 標準化 (Z-Score) [標準]</option>
+                            <option value="log">📈 対数変換 + 標準化</option>
+                            <option value="robust">🛡️ ロバスト標準化 (Median/IQR)</option>
+                            <option value="none">直値 (変換なし)</option>
+                        </select>
                         <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
                             <input type="checkbox" id="show-vectors" checked style="margin-right: 0.5rem; width: auto;">
                             ベクトルの表示・非表示
@@ -190,6 +312,6 @@
     </div>
 
     <!-- Application Logic -->
-    <script src="js/app.js"></script>
+    <script src="js/app.js?v=2"></script>
 </body>
 </html>

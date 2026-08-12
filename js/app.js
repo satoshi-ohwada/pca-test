@@ -3,22 +3,39 @@ let rawNumericData = [];
 let labels = [];
 let features = null;
 let disabledFeatures = new Set();
+let disabledLabels = new Set();
+let detectedOutlierLabels = new Set();
+let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
+let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
 let currentScale = 1.0;
 let isStandardized = true;
+let currentRelView = 'heatmap';
 
 function getActiveFeatures() {
     if (!features) return [];
     return features.filter(f => !disabledFeatures.has(f));
 }
 
+function getActiveLabels() {
+    if (!labels) return [];
+    return labels.filter(l => !disabledLabels.has(l));
+}
+
 function getActiveNumericData() {
     if (!numericData || numericData.length === 0) return [];
-    const activeIndices = [];
+    const activeColIndices = [];
     features.forEach((f, idx) => {
-        if (!disabledFeatures.has(f)) activeIndices.push(idx);
+        if (!disabledFeatures.has(f)) activeColIndices.push(idx);
     });
-    return numericData.map(row => activeIndices.map(idx => row[idx]));
+    
+    const activeData = [];
+    labels.forEach((label, rIdx) => {
+        if (!disabledLabels.has(label)) {
+            activeData.push(activeColIndices.map(cIdx => numericData[rIdx][cIdx]));
+        }
+    });
+    return activeData;
 }
 
 // DOM Elements
@@ -42,47 +59,87 @@ const btnReset = document.getElementById('btn-reset');
 const btnBackToData = document.getElementById('btn-back-to-data');
 const btnUseSample = document.getElementById('btn-use-sample');
 
-// --- Event Listeners ---
+// --- Window Drag & Drop Protection (Prevents Firefox file navigation) ---
+window.addEventListener('dragover', (e) => e.preventDefault(), false);
+window.addEventListener('drop', (e) => e.preventDefault(), false);
 
-dropZone.addEventListener('dragover', (e) => {
-    e.preventDefault();
-    dropZone.classList.add('dragover');
-});
-dropZone.addEventListener('dragleave', () => {
-    dropZone.classList.remove('dragover');
-});
-dropZone.addEventListener('drop', (e) => {
-    e.preventDefault();
-    dropZone.classList.remove('dragover');
-    if (e.dataTransfer.files.length) {
-        handleFile(e.dataTransfer.files[0]);
-    }
-});
-dropZone.addEventListener('click', () => fileInput.click());
-fileInput.addEventListener('change', (e) => {
-    if (e.target.files.length) {
-        handleFile(e.target.files[0]);
-    }
-});
+// --- File Drop & Selection Event Listeners ---
 
-btnUseSample.addEventListener('click', () => {
-    Papa.parse(sampleCsv, {
-        complete: function(results) {
-            processRawData(results.data);
-        },
-        header: false,
-        skipEmptyLines: true
+if (dropZone) {
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
     });
-});
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer && e.dataTransfer.files.length) {
+            handleFile(e.dataTransfer.files[0]);
+        }
+    });
+}
 
-btnRunPca.addEventListener('click', runPCA);
-axisXSelect.addEventListener('change', updatePlot);
-axisYSelect.addEventListener('change', updatePlot);
-vectorScale.addEventListener('input', (e) => {
-    currentScale = parseFloat(e.target.value);
-    vectorScaleVal.textContent = `x${currentScale.toFixed(1)}`;
-    if(pcaResult) updatePlot();
-});
+if (fileInput) {
+    fileInput.addEventListener('change', (e) => {
+        if (e.target && e.target.files && e.target.files.length) {
+            handleFile(e.target.files[0]);
+        }
+    });
+}
+
+if (btnUseSample) {
+    btnUseSample.addEventListener('click', () => {
+        const parseAndProcess = (csvText) => {
+            Papa.parse(csvText, {
+                complete: function(results) {
+                    if (results.data && results.data.length >= 3) {
+                        processRawData(results.data);
+                    } else {
+                        alert("サンプルデータのパースに失敗しました。データ形式を確認してください。");
+                    }
+                },
+                error: function(err) {
+                    alert("CSVパースエラー: " + err);
+                },
+                header: false,
+                skipEmptyLines: true
+            });
+        };
+
+        const csvInMemory = (typeof sampleCsv !== 'undefined' && sampleCsv) ? sampleCsv : (typeof window !== 'undefined' ? window.sampleCsv : null);
+        if (csvInMemory && csvInMemory.length > 50) {
+            parseAndProcess(csvInMemory);
+            return;
+        }
+
+        fetch('js/sample_data.csv?v=' + Date.now())
+            .then(res => {
+                if (!res.ok) throw new Error("HTTP Status " + res.status);
+                return res.text();
+            })
+            .then(text => {
+                parseAndProcess(text);
+            })
+            .catch(err => {
+                console.error("fetch sample error:", err);
+                alert("サンプルデータの読み込み（fetch）に失敗しました: " + err.message + "\n※ 「1. データセット・インポート」エリアのファイル選択またはExcel貼り付け機能もお試しください。");
+            });
+    });
+}
+
+if (btnRunPca) btnRunPca.addEventListener('click', runPCA);
+if (axisXSelect) axisXSelect.addEventListener('change', updatePlot);
+if (axisYSelect) axisYSelect.addEventListener('change', updatePlot);
+if (vectorScale) {
+    vectorScale.addEventListener('input', (e) => {
+        currentScale = parseFloat(e.target.value);
+        if (vectorScaleVal) vectorScaleVal.textContent = `x${currentScale.toFixed(1)}`;
+        if (pcaResult) updatePlot();
+    });
+}
 const showLabelsCheckbox = document.getElementById('show-labels');
 if (showLabelsCheckbox) {
     showLabelsCheckbox.addEventListener('change', () => {
@@ -120,36 +177,53 @@ if (clusterCount) {
     clusterCount.addEventListener('change', handleClusterChange);
 }
 
-btnReset.addEventListener('click', () => {
-    isStandardized = true;
-    if (toggleStd1) toggleStd1.checked = true;
-    if (toggleStd2) toggleStd2.checked = true;
-    if (toggleScree) toggleScree.checked = false;
-    const toggleElbow = document.getElementById('show-elbow-plot');
-    if (toggleElbow) toggleElbow.checked = false;
-    if (toggleLoadings) toggleLoadings.checked = false;
-    
-    const showVectorsCb = document.getElementById('show-vectors');
-    if (showVectorsCb) showVectorsCb.checked = true;
-    const enableClusteringCb = document.getElementById('enable-clustering');
-    if (enableClusteringCb) enableClusteringCb.checked = true;
-    const showLabelsCb = document.getElementById('show-labels');
-    if (showLabelsCb) showLabelsCb.checked = true;
-    
-    const screeContainer = document.getElementById('scree-container');
-    if (screeContainer) screeContainer.classList.add('hidden');
-    const elbowContainer = document.getElementById('elbow-container');
-    if (elbowContainer) elbowContainer.classList.add('hidden');
-    const loadingsContainer = document.getElementById('loadings-container');
-    if (loadingsContainer) loadingsContainer.classList.add('hidden');
-    globalData = null;
-    rawNumericData = [];
-    numericData = [];
-    uploadSection.classList.remove('hidden');
-    resultsSection.classList.add('hidden');
-    dataPreview.classList.add('hidden');
-    fileInput.value = "";
-});
+if (btnReset) {
+    btnReset.addEventListener('click', () => {
+        transformMode = 'std';
+        corrMethod = 'pearson';
+        disabledFeatures = new Set();
+        disabledLabels = new Set();
+        detectedOutlierLabels = new Set();
+        
+        const transformSelect = document.getElementById('transform-mode-select');
+        const transformSelect2 = document.getElementById('transform-mode-select-step2');
+        if (transformSelect) transformSelect.value = 'std';
+        if (transformSelect2) transformSelect2.value = 'std';
+        
+        const pearsonRadio = document.querySelector('input[name="corr-method"][value="pearson"]');
+        if (pearsonRadio) pearsonRadio.checked = true;
+
+        const toggleScreeCb = document.getElementById('show-scree-plot');
+        if (toggleScreeCb) toggleScreeCb.checked = false;
+        const toggleElbow = document.getElementById('show-elbow-plot');
+        if (toggleElbow) toggleElbow.checked = false;
+        const toggleLoadingsCb = document.getElementById('show-loadings-chart');
+        if (toggleLoadingsCb) toggleLoadingsCb.checked = false;
+        
+        const showVectorsCb = document.getElementById('show-vectors');
+        if (showVectorsCb) showVectorsCb.checked = true;
+        const enableClusteringCb = document.getElementById('enable-clustering');
+        if (enableClusteringCb) enableClusteringCb.checked = true;
+        const showLabelsCb = document.getElementById('show-labels');
+        if (showLabelsCb) showLabelsCb.checked = true;
+        
+        const screeContainer = document.getElementById('scree-container');
+        if (screeContainer) screeContainer.classList.add('hidden');
+        const elbowContainer = document.getElementById('elbow-container');
+        if (elbowContainer) elbowContainer.classList.add('hidden');
+        const loadingsContainer = document.getElementById('loadings-container');
+        if (loadingsContainer) loadingsContainer.classList.add('hidden');
+        
+        rawNumericData = [];
+        numericData = [];
+        labels = [];
+        features = null;
+        if (uploadSection) uploadSection.classList.remove('hidden');
+        if (resultsSection) resultsSection.classList.add('hidden');
+        if (dataPreview) dataPreview.classList.add('hidden');
+        if (fileInput) fileInput.value = "";
+    });
+}
 
 if (btnBackToData) {
     btnBackToData.addEventListener('click', () => {
@@ -165,26 +239,92 @@ if (toggleShowAll) {
     });
 }
 
-const toggleStd1 = document.getElementById('standardize-step1');
-const toggleStd2 = document.getElementById('standardize-step2');
+// Transform Select Handlers
+const transformSelect = document.getElementById('transform-mode-select');
+const transformSelect2 = document.getElementById('transform-mode-select-step2');
+const transformBadge = document.getElementById('transform-badge');
+const transformHint = document.getElementById('transform-hint');
 
-function handleStandardizeToggle(e) {
-    isStandardized = e.target.checked;
-    if (toggleStd1) toggleStd1.checked = isStandardized;
-    if (toggleStd2) toggleStd2.checked = isStandardized;
+const transformHints = {
+    std: "💡 <b>標準化 (Z-Score)</b>: 平均を0、標準偏差を1に揃え、変数ごとの単位差（例：金額と人数）による影響をなくします (標準)。",
+    log: "📈 <b>対数変換 + 標準化</b>: 金額や売上など一部の極端な高値を対数でマイルドにし、その後標準化します。",
+    robust: "🛡️ <b>ロバスト標準化 (Median/IQR)</b>: 平均・標準偏差ではなく中央値と四分位範囲基準で揃え、特異な外れ値の影響を抑えます。",
+    none: "直値: 補正や単位調整を行わず、生データをそのまま使用します。"
+};
+
+const transformBadges = {
+    std: "✨ 標準化 (Z-Score) 適用中",
+    log: "📈 対数変換 + 標準化 適用中",
+    robust: "🛡️ ロバスト標準化 適用中",
+    none: "生データ (変換なし)"
+};
+
+function handleTransformChange(newMode) {
+    transformMode = newMode;
+    if (transformSelect) transformSelect.value = transformMode;
+    if (transformSelect2) transformSelect2.value = transformMode;
+    if (transformBadge) transformBadge.textContent = transformBadges[transformMode] || transformMode;
+    if (transformHint) transformHint.innerHTML = transformHints[transformMode] || '';
     
     if (rawNumericData && rawNumericData.length > 0) {
         applyStandardization();
-        renderPreview();
-        renderStatistics();
-        if (!resultsSection.classList.contains('hidden')) {
-            runPCA();
-        }
+        refreshAllVisualizations();
     }
 }
 
-if (toggleStd1) toggleStd1.addEventListener('change', handleStandardizeToggle);
-if (toggleStd2) toggleStd2.addEventListener('change', handleStandardizeToggle);
+if (transformSelect) {
+    transformSelect.addEventListener('change', (e) => handleTransformChange(e.target.value));
+}
+if (transformSelect2) {
+    transformSelect2.addEventListener('change', (e) => handleTransformChange(e.target.value));
+}
+
+// Correlation Method Handler
+document.querySelectorAll('input[name="corr-method"]').forEach(radio => {
+    radio.addEventListener('change', (e) => {
+        corrMethod = e.target.value;
+        renderCorrelationHeatmap();
+        if (currentRelView === 'splom') {
+            renderSPLOM();
+        }
+    });
+});
+
+// Outlier Action Buttons
+const btnExcludeOutliers = document.getElementById('btn-exclude-outliers');
+if (btnExcludeOutliers) {
+    btnExcludeOutliers.addEventListener('click', () => {
+        if (detectedOutlierLabels.size === 0) {
+            alert("現在、1.5×IQR基準を超える外れ値サンプルは検出されていません。");
+            return;
+        }
+        detectedOutlierLabels.forEach(lbl => disabledLabels.add(lbl));
+        refreshAllVisualizations();
+    });
+}
+
+const btnResetSampleExclusion = document.getElementById('btn-reset-sample-exclusion');
+if (btnResetSampleExclusion) {
+    btnResetSampleExclusion.addEventListener('click', () => {
+        disabledLabels.clear();
+        refreshAllVisualizations();
+    });
+}
+
+const btnToggleSamplePanel = document.getElementById('btn-toggle-sample-panel');
+const samplePanel = document.getElementById('sample-selection-panel');
+if (btnToggleSamplePanel && samplePanel) {
+    btnToggleSamplePanel.addEventListener('click', () => {
+        samplePanel.classList.toggle('hidden');
+    });
+}
+
+const sampleSearchInput = document.getElementById('sample-search-input');
+if (sampleSearchInput) {
+    sampleSearchInput.addEventListener('input', () => {
+        renderSampleCheckboxPanel();
+    });
+}
 
 const toggleScree = document.getElementById('show-scree-plot');
 if (toggleScree) {
@@ -197,6 +337,30 @@ if (toggleElbow) {
 const toggleLoadings = document.getElementById('show-loadings-chart');
 if (toggleLoadings) {
     toggleLoadings.addEventListener('change', () => renderLoadingsChart());
+}
+
+const btnViewHeatmap = document.getElementById('btn-view-heatmap');
+const btnViewSplom = document.getElementById('btn-view-splom');
+const heatmapWrapper = document.getElementById('heatmap-view-wrapper');
+const splomWrapper = document.getElementById('splom-view-wrapper');
+
+if (btnViewHeatmap && btnViewSplom) {
+    btnViewHeatmap.addEventListener('click', () => {
+        currentRelView = 'heatmap';
+        btnViewHeatmap.classList.add('active');
+        btnViewSplom.classList.remove('active');
+        if (heatmapWrapper) heatmapWrapper.classList.remove('hidden');
+        if (splomWrapper) splomWrapper.classList.add('hidden');
+        renderCorrelationHeatmap();
+    });
+    btnViewSplom.addEventListener('click', () => {
+        currentRelView = 'splom';
+        btnViewSplom.classList.add('active');
+        btnViewHeatmap.classList.remove('active');
+        if (splomWrapper) splomWrapper.classList.remove('hidden');
+        if (heatmapWrapper) heatmapWrapper.classList.add('hidden');
+        renderSPLOM();
+    });
 }
 
 btnDownloadCsv.addEventListener('click', downloadCsv);
@@ -257,41 +421,49 @@ function handleFile(file) {
 }
 
 function processRawData(data) {
-    if (!data || data.length < 3) {
-        alert("データが少なすぎます。分析にはより多くの行が必要です。");
-        return;
-    }
-    
-    const headerRow = data[0];
-    features = headerRow.slice(1);
-    
-    const rawLabels = [];
-    const parsedNumeric = [];
-    
-    for (let i = 1; i < data.length; i++) {
-        const row = data[i];
-        if (row.length === 0) continue;
-        
-        rawLabels.push(row[0] || `Row ${i}`);
-        
-        const numericRow = [];
-        for (let j = 1; j < headerRow.length; j++) {
-            const val = parseFloat(row[j]);
-            numericRow.push(isNaN(val) ? 0 : val);
+    try {
+        if (!data || data.length < 3) {
+            alert("データが少なすぎます。分析にはより多くの行が必要です。");
+            return;
         }
-        parsedNumeric.push(numericRow);
+        
+        const headerRow = data[0];
+        features = headerRow.slice(1);
+        
+        const rawLabels = [];
+        const parsedNumeric = [];
+        
+        for (let i = 1; i < data.length; i++) {
+            const row = data[i];
+            if (!row || row.length === 0 || !row[0]) continue;
+            
+            rawLabels.push(String(row[0]).trim() || `Row ${i}`);
+            
+            const numericRow = [];
+            for (let j = 1; j < headerRow.length; j++) {
+                const val = parseFloat(row[j]);
+                numericRow.push(isNaN(val) ? 0 : val);
+            }
+            parsedNumeric.push(numericRow);
+        }
+        
+        labels = rawLabels;
+        rawNumericData = parsedNumeric;
+        disabledFeatures = new Set();
+        disabledLabels = new Set();
+        detectedOutlierLabels = new Set();
+        pcaResult = null;
+        
+        applyStandardization();
+        
+        renderPreview();
+        renderStatistics();
+        renderDataDiagnosis();
+        dataPreview.classList.remove('hidden');
+    } catch (err) {
+        console.error("processRawData error:", err);
+        alert("データの表示・初期処理中にエラーが発生しました: " + err.message);
     }
-    
-    labels = rawLabels;
-    rawNumericData = parsedNumeric;
-    disabledFeatures = new Set();
-    
-    applyStandardization();
-    
-    renderPreview();
-    renderStatistics();
-    renderDataDiagnosis();
-    dataPreview.classList.remove('hidden');
 }
 
 function applyStandardization() {
@@ -300,19 +472,57 @@ function applyStandardization() {
     const p = rawNumericData[0].length;
     
     numericData = JSON.parse(JSON.stringify(rawNumericData)); 
-    if (!isStandardized) return;
+    if (transformMode === 'none') return;
     
-    for (let j = 0; j < p; j++) {
-        let sum = 0;
-        for (let i = 0; i < n; i++) sum += numericData[i][j];
-        const mean = sum / n;
-        
-        let sumSq = 0;
-        for (let i = 0; i < n; i++) sumSq += Math.pow(numericData[i][j] - mean, 2);
-        const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)) || 1; 
-        
-        for (let i = 0; i < n; i++) {
-            numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+    if (transformMode === 'log') {
+        for (let j = 0; j < p; j++) {
+            let minVal = Infinity;
+            for (let i = 0; i < n; i++) {
+                if (numericData[i][j] < minVal) minVal = numericData[i][j];
+            }
+            const shift = minVal < 0 ? Math.abs(minVal) + 1 : 0;
+            for (let i = 0; i < n; i++) {
+                numericData[i][j] = Math.log(numericData[i][j] + shift + 1);
+            }
+        }
+        for (let j = 0; j < p; j++) {
+            let sum = 0;
+            for (let i = 0; i < n; i++) sum += numericData[i][j];
+            const mean = sum / n;
+            let sumSq = 0;
+            for (let i = 0; i < n; i++) sumSq += Math.pow(numericData[i][j] - mean, 2);
+            const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)) || 1;
+            for (let i = 0; i < n; i++) {
+                numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+            }
+        }
+    } else if (transformMode === 'robust') {
+        for (let j = 0; j < p; j++) {
+            const col = [];
+            for (let i = 0; i < n; i++) col.push(numericData[i][j]);
+            col.sort((a, b) => a - b);
+            const mid = Math.floor(n / 2);
+            const median = n % 2 !== 0 ? col[mid] : (col[mid - 1] + col[mid]) / 2;
+            const q1 = col[Math.floor(n * 0.25)];
+            const q3 = col[Math.floor(n * 0.75)];
+            const iqr = (q3 - q1) || 1;
+            for (let i = 0; i < n; i++) {
+                numericData[i][j] = (numericData[i][j] - median) / iqr;
+            }
+        }
+    } else {
+        for (let j = 0; j < p; j++) {
+            let sum = 0;
+            for (let i = 0; i < n; i++) sum += numericData[i][j];
+            const mean = sum / n;
+            
+            let sumSq = 0;
+            for (let i = 0; i < n; i++) sumSq += Math.pow(numericData[i][j] - mean, 2);
+            const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)) || 1; 
+            
+            for (let i = 0; i < n; i++) {
+                numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+            }
         }
     }
 }
@@ -321,18 +531,24 @@ function renderPreview() {
     const thead = document.querySelector('#preview-table thead');
     const tbody = document.querySelector('#preview-table tbody');
     
-    if(!features || features.length === 0) return;
+    if (!features || features.length === 0) return;
+    
+    const activeLabels = getActiveLabels();
+    const activeNumeric = getActiveNumericData();
+    const activeFeatures = getActiveFeatures();
+    
+    if (activeLabels.length === 0 || activeNumeric.length === 0) return;
     
     const showAll = document.getElementById('show-all-data') ? document.getElementById('show-all-data').checked : false;
-    const limit = showAll ? numericData.length : Math.min(5, numericData.length);
+    const limit = showAll ? activeLabels.length : Math.min(5, activeLabels.length);
     
-    thead.innerHTML = `<tr><th>ラベル</th>${features.map(f => `<th>${f}</th>`).join('')}</tr>`;
+    thead.innerHTML = `<tr><th>ラベル</th>${activeFeatures.map(f => `<th>${f}</th>`).join('')}</tr>`;
     tbody.innerHTML = '';
     
-    for(let i=0; i<limit; i++) {
+    for (let i = 0; i < limit; i++) {
         const tr = document.createElement('tr');
-        const rowHTML = `<td><strong>${labels[i]}</strong></td>` + 
-                        numericData[i].map(val => `<td>${val.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>`).join('');
+        const rowHTML = `<td><strong>${activeLabels[i]}</strong></td>` + 
+                        activeNumeric[i].map(val => `<td>${val.toLocaleString(undefined, {minimumFractionDigits: 2, maximumFractionDigits: 2})}</td>`).join('');
         tr.innerHTML = rowHTML;
         tbody.appendChild(tr);
     }
@@ -343,34 +559,54 @@ function renderStatistics() {
     if (!tbody) return;
     tbody.innerHTML = '';
     
-    const n = numericData.length;
+    const activeNumeric = getActiveNumericData();
+    const activeLabels = getActiveLabels();
+    const activeFeatures = getActiveFeatures();
+    
+    if (!activeNumeric || activeNumeric.length === 0 || !features) return;
+    
+    const n = activeNumeric.length;
     const p = features.length;
     
     for (let j = 0; j < p; j++) {
         let min = Infinity, max = -Infinity, sum = 0;
         let colData = [];
         
-        for (let i = 0; i < n; i++) {
-            const val = numericData[i][j];
-            colData.push(val);
-            if (val < min) min = val;
-            if (val > max) max = val;
-            sum += val;
+        const colIdxInActive = activeFeatures.indexOf(features[j]);
+        
+        if (colIdxInActive !== -1) {
+            for (let i = 0; i < n; i++) {
+                const val = activeNumeric[i][colIdxInActive];
+                colData.push(val);
+                if (val < min) min = val;
+                if (val > max) max = val;
+                sum += val;
+            }
+        } else {
+            labels.forEach((lbl, rIdx) => {
+                if (!disabledLabels.has(lbl)) {
+                    const val = numericData[rIdx][j];
+                    colData.push(val);
+                    if (val < min) min = val;
+                    if (val > max) max = val;
+                    sum += val;
+                }
+            });
         }
         
         colData.sort((a, b) => a - b);
         let median = 0;
-        if (n > 0) {
-            const mid = Math.floor(n / 2);
-            median = n % 2 !== 0 ? colData[mid] : (colData[mid - 1] + colData[mid]) / 2;
+        if (colData.length > 0) {
+            const mid = Math.floor(colData.length / 2);
+            median = colData.length % 2 !== 0 ? colData[mid] : (colData[mid - 1] + colData[mid]) / 2;
         }
         
-        const mean = sum / n;
+        const mean = sum / (colData.length || 1);
         let sumSq = 0;
-        for (let i = 0; i < n; i++) {
-            sumSq += Math.pow(numericData[i][j] - mean, 2);
+        for (let i = 0; i < colData.length; i++) {
+            sumSq += Math.pow(colData[i] - mean, 2);
         }
-        const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1));
+        const stdDev = Math.sqrt(sumSq / (colData.length > 1 ? colData.length - 1 : 1));
         
         const isChecked = !disabledFeatures.has(features[j]);
         const tr = document.createElement('tr');
@@ -401,18 +637,13 @@ function renderStatistics() {
                 }
                 disabledFeatures.add(feat);
             }
-            renderStatistics();
-            renderDataDiagnosis();
-            if (!resultsSection.classList.contains('hidden')) {
-                runPCA();
-            }
+            refreshAllVisualizations();
         });
     });
     
-    const activeFeatures = getActiveFeatures();
     const runPcaBtn = document.getElementById('btn-run-pca');
     if (runPcaBtn) {
-        if (activeFeatures.length < 2) {
+        if (activeFeatures.length < 2 || activeLabels.length < 3) {
             runPcaBtn.disabled = true;
             runPcaBtn.style.opacity = '0.5';
             runPcaBtn.style.cursor = 'not-allowed';
@@ -423,16 +654,258 @@ function renderStatistics() {
         }
     }
     
-    const activeData = getActiveNumericData();
-    const activeP = activeFeatures.length;
+    renderCorrelationHeatmap();
+    renderBoxPlots();
+    if (currentRelView === 'splom') {
+        renderSPLOM();
+    }
+}
+
+function refreshAllVisualizations() {
+    renderPreview();
+    renderStatistics();
+    renderDataDiagnosis();
+    if (!resultsSection.classList.contains('hidden')) {
+        runPCA();
+    }
+}
+
+function renderCorrelationHeatmap() {
+    const container = document.getElementById('heatmap-container');
+    if (!container) return;
     
+    const activeFeatures = getActiveFeatures();
+    const activeData = getActiveNumericData();
+    if (!activeFeatures || activeFeatures.length < 2 || !activeData || activeData.length === 0) return;
+    
+    const p = activeFeatures.length;
+    const zMatrix = [];
+    const textMatrix = [];
+    const hoverTextMatrix = [];
+    const annotations = [];
+    
+    for (let r = 0; r < p; r++) {
+        const zRow = [];
+        const textRow = [];
+        const hoverRow = [];
+        const yData = activeData.map(row => row[r]);
+        
+        for (let c = 0; c < p; c++) {
+            const xData = activeData.map(row => row[c]);
+            const corrInfo = calculateCorrelationWithPValue(xData, yData);
+            const rVal = corrInfo.r;
+            const stars = (r === c) ? '' : corrInfo.stars;
+            const valText = rVal.toFixed(2) + stars;
+            
+            zRow.push(rVal);
+            textRow.push(valText);
+            
+            const pStr = corrInfo.p < 0.001 ? '< 0.001' : corrInfo.p.toFixed(4);
+            const methodLabel = corrMethod === 'spearman' ? '順位相関係数 (Spearman ρ)' : '相関係数 (Pearson r)';
+            hoverRow.push(`<b>${activeFeatures[r]}</b> vs <b>${activeFeatures[c]}</b><br>${methodLabel}: ${rVal.toFixed(4)}<br>p値: ${pStr}`);
+            
+            const fontColor = Math.abs(rVal) > 0.65 ? '#ffffff' : '#0f172a';
+            annotations.push({
+                x: activeFeatures[c],
+                y: activeFeatures[r],
+                text: `<b>${valText}</b>`,
+                font: { color: fontColor, size: p > 6 ? 10 : 12 },
+                showarrow: false
+            });
+        }
+        zMatrix.push(zRow);
+        textMatrix.push(textRow);
+        hoverTextMatrix.push(hoverRow);
+    }
+    
+    const trace = {
+        z: zMatrix,
+        x: activeFeatures,
+        y: activeFeatures,
+        hovertext: hoverTextMatrix,
+        hoverinfo: 'text',
+        type: 'heatmap',
+        colorscale: [
+            [0, '#2563eb'],
+            [0.5, '#f8fafc'],
+            [1, '#dc2626']
+        ],
+        zmin: -1,
+        zmax: 1,
+        hoverongaps: false,
+        colorbar: {
+            title: { text: corrMethod === 'spearman' ? '順位相関 ρ' : '相関係数 r', font: { size: 12 } },
+            ticks: 'outside',
+            len: 0.9
+        }
+    };
+    
+    const layout = {
+        height: Math.max(380, p * 65),
+        margin: { l: 90, r: 90, t: 30, b: 90 },
+        yaxis: { autorange: 'reversed' },
+        annotations: annotations
+    };
+    
+    Plotly.newPlot('heatmap-container', [trace], layout, {responsive: true, displaylogo: false});
+}
+
+function renderBoxPlots() {
+    const container = document.getElementById('boxplot-container');
+    const insightDiv = document.getElementById('boxplot-insight');
+    const badgeSpan = document.getElementById('sample-count-badge');
+    if (!container) return;
+    
+    const activeFeatures = getActiveFeatures();
+    const activeLabels = getActiveLabels();
+    const activeData = getActiveNumericData();
+    if (!activeFeatures || activeFeatures.length === 0 || !activeData || activeData.length === 0) return;
+    
+    if (badgeSpan) {
+        const total = labels.length;
+        const activeCount = activeLabels.length;
+        const excludedCount = disabledLabels.size;
+        badgeSpan.textContent = `全 ${total} サンプル中 ${activeCount} サンプル分析対象 (${excludedCount} 件除外中)`;
+        badgeSpan.style.background = excludedCount > 0 ? '#fef3c7' : '#f1f5f9';
+        badgeSpan.style.color = excludedCount > 0 ? '#92400e' : '#334155';
+        badgeSpan.style.borderColor = excludedCount > 0 ? '#f59e0b' : '#cbd5e1';
+    }
+
     const traces = [];
+    const outlierSummary = [];
+    detectedOutlierLabels = new Set();
+    
+    activeFeatures.forEach((feat, j) => {
+        const colData = activeData.map(row => row[j]);
+        const sortedData = [...colData].sort((a, b) => a - b);
+        const n = sortedData.length;
+        
+        const q1 = sortedData[Math.floor(n * 0.25)];
+        const q3 = sortedData[Math.floor(n * 0.75)];
+        const iqr = q3 - q1;
+        const lowerBound = q1 - 1.5 * iqr;
+        const upperBound = q3 + 1.5 * iqr;
+        
+        const featOutlierLabels = [];
+        colData.forEach((val, rIdx) => {
+            if (val < lowerBound || val > upperBound) {
+                const lblName = activeLabels[rIdx];
+                featOutlierLabels.push(lblName);
+                detectedOutlierLabels.add(lblName);
+            }
+        });
+        
+        if (featOutlierLabels.length > 0) {
+            outlierSummary.push(`「<strong>${feat}</strong>」: ${featOutlierLabels.length}件 (${featOutlierLabels.join('、 ')})`);
+        }
+        
+        traces.push({
+            y: colData,
+            text: activeLabels,
+            name: feat,
+            type: 'box',
+            boxpoints: 'outliers',
+            marker: { color: '#ef4444', size: 6, outliercolor: '#dc2626' },
+            line: { color: '#2563eb', width: 1.5 },
+            fillcolor: 'rgba(147, 197, 253, 0.35)',
+            hovertemplate: '<b>%{text}</b> (%{x})<br>値: %{y:.2f}<extra></extra>'
+        });
+    });
+    
+    if (insightDiv) {
+        if (outlierSummary.length > 0) {
+            insightDiv.style.background = '#fef2f2';
+            insightDiv.style.borderLeft = '4px solid #ef4444';
+            insightDiv.style.color = '#991b1b';
+            insightDiv.innerHTML = `⚠️ <strong>外れ値のアラート (1.5×IQR基準)</strong>: 以下の変数で極端な値（都市など）が検出されました。<br>${outlierSummary.join('<br>')}<br><span style="font-size:0.85em; color:#b91c1c; margin-top:0.25rem; display:block;">💡 上の「⚡ 検出された外れ値サンプルを一括除外」ボタンを押すことで、これらの特異な都市を分析からワンクリックで取り除くことができます。</span>`;
+        } else {
+            insightDiv.style.background = '#f0fdf4';
+            insightDiv.style.borderLeft = '4px solid #22c55e';
+            insightDiv.style.color = '#166534';
+            insightDiv.innerHTML = `✅ <strong>分布チェック結果</strong>: 1.5×IQR基準を超える明らかな外れ値は検出されませんでした（良好な状態）。`;
+        }
+    }
+    
+    const yAxisTitles = {
+        std: '標準化 Zスコア (Z-Score)',
+        log: '対数変換 Zスコア log(X+1)',
+        robust: 'ロバストスコア (Median/IQR)',
+        none: '測定値 (生データ)'
+    };
+
+    const layout = {
+        height: 400,
+        margin: { l: 60, r: 30, t: 30, b: 60 },
+        yaxis: { 
+            title: yAxisTitles[transformMode] || '補正スコア',
+            zeroline: true
+        },
+        showlegend: false
+    };
+    
+    Plotly.newPlot('boxplot-container', traces, layout, {responsive: true, displaylogo: false});
+    renderSampleCheckboxPanel();
+}
+
+function renderSampleCheckboxPanel() {
+    const container = document.getElementById('sample-checkboxes-container');
+    if (!container || !labels || labels.length === 0) return;
+    
+    const searchVal = (document.getElementById('sample-search-input')?.value || '').toLowerCase().trim();
+    container.innerHTML = '';
+    
+    labels.forEach(lbl => {
+        if (searchVal && !lbl.toLowerCase().includes(searchVal)) return;
+        const isChecked = !disabledLabels.has(lbl);
+        const isOutlier = detectedOutlierLabels.has(lbl);
+        
+        const labelEl = document.createElement('label');
+        labelEl.style.cssText = 'display: flex; align-items: center; font-size: 0.82rem; cursor: pointer; user-select: none; gap: 0.3rem; margin: 0;';
+        if (isOutlier) {
+            labelEl.style.fontWeight = 'bold';
+            labelEl.style.color = '#dc2626';
+        }
+        
+        labelEl.innerHTML = `
+            <input type="checkbox" class="sample-checkbox" data-label="${lbl}" ${isChecked ? 'checked' : ''} style="width: auto; margin-right: 0.2rem;">
+            <span>${lbl}</span> ${isOutlier ? '<span title="外れ値として検出">⚠️</span>' : ''}
+        `;
+        container.appendChild(labelEl);
+    });
+    
+    container.querySelectorAll('.sample-checkbox').forEach(cb => {
+        cb.addEventListener('change', (e) => {
+            const lbl = e.target.dataset.label;
+            if (e.target.checked) {
+                disabledLabels.delete(lbl);
+            } else {
+                if (getActiveLabels().length <= 3) {
+                    alert("分析には最低3つのサンプル（都市）が必要です。");
+                    e.target.checked = true;
+                    return;
+                }
+                disabledLabels.add(lbl);
+            }
+            refreshAllVisualizations();
+        });
+    });
+}
+
+function renderSPLOM() {
+    const activeFeatures = getActiveFeatures();
+    const activeData = getActiveNumericData();
+    if (!activeFeatures || activeFeatures.length < 2 || !activeData || activeData.length === 0) return;
+    
+    const activeP = activeFeatures.length;
+    const traces = [];
+    const shapes = [];
     const layout = {
         showlegend: false,
         hovermode: 'closest',
-        plot_bgcolor: 'rgba(250,250,250, 0.95)',
-        margin: {l: 60, r: 20, b: 60, t: 70},
-        height: Math.max(500, activeP * 140),
+        plot_bgcolor: '#f8fafc',
+        paper_bgcolor: '#ffffff',
+        margin: {l: 65, r: 25, b: 65, t: 75},
+        height: Math.max(520, activeP * 150),
     };
     
     const gap = 0.02;
@@ -449,32 +922,62 @@ function renderStatistics() {
             const maxX = Math.max(...xData);
             const minY = Math.min(...yData);
             const maxY = Math.max(...yData);
-            const padX = (maxX - minX) * 0.05 || 1;
-            const padY = (maxY - minY) * 0.05 || 1;
+            const padX = (maxX - minX) * 0.06 || 1;
+            const padY = (maxY - minY) * 0.06 || 1;
 
             const x0 = c / activeP + (c === 0 ? 0 : gap/2);
             const x1 = (c+1)/activeP - (c === activeP-1 ? 0 : gap/2);
             const y0 = 1 - (r+1)/activeP + (r === activeP-1 ? 0 : gap/2);
             const y1 = 1 - r/activeP - (r === 0 ? 0 : gap/2);
             
+            let cellBg = '#ffffff';
+            if (r === c) {
+                cellBg = 'rgba(248, 250, 252, 0.9)';
+            } else if (r < c) {
+                const corrInfo = calculateCorrelationWithPValue(xData, yData);
+                const absR = Math.abs(corrInfo.r);
+                if (corrInfo.r > 0) {
+                    cellBg = `rgba(239, 68, 68, ${0.05 + absR * 0.45})`;
+                } else {
+                    cellBg = `rgba(59, 130, 246, ${0.05 + absR * 0.45})`;
+                }
+            } else {
+                cellBg = '#ffffff';
+            }
+
+            shapes.push({
+                type: 'rect',
+                xref: 'paper',
+                yref: 'paper',
+                x0: x0,
+                x1: x1,
+                y0: y0,
+                y1: y1,
+                line: { color: '#cbd5e1', width: 1 },
+                fillcolor: cellBg,
+                layer: 'below'
+            });
+
             layout[axNameX] = { 
                 domain: [x0, x1], 
-                showgrid: false, 
+                showgrid: true,
+                gridcolor: '#f1f5f9',
                 zeroline: false, 
-                showticklabels: r === 0, 
-                side: 'top',
+                showticklabels: r === activeP - 1, 
+                side: 'bottom',
                 tickangle: 0,
                 nticks: 3,
-                tickfont: { size: 10 },
+                tickfont: { size: 9, color: '#64748b' },
                 range: [minX - padX, maxX + padX] 
             };
             layout[axNameY] = { 
                 domain: [y0, y1], 
-                showgrid: false, 
+                showgrid: true,
+                gridcolor: '#f1f5f9',
                 zeroline: false, 
                 showticklabels: c === 0, 
                 nticks: 3,
-                tickfont: { size: 10 },
+                tickfont: { size: 9, color: '#64748b' },
                 range: (r === c) ? undefined : [minY - padY, maxY + padY] 
             };
             
@@ -484,16 +987,18 @@ function renderStatistics() {
             
             if (r === 0) {
                 layout[axNameX].side = 'top';
-                layout[axNameX].title = { text: activeFeatures[c], font: {size: 12}, standoff: 20 };
+                layout[axNameX].showticklabels = false;
+                layout[axNameX].title = { text: `<b>${activeFeatures[c]}</b>`, font: {size: 12, color: '#1e293b'}, standoff: 12 };
             }
             if (c === 0) {
-                layout[axNameY].title = { text: activeFeatures[r], font: {size: 12}, standoff: 20 };
+                layout[axNameY].title = { text: `<b>${activeFeatures[r]}</b>`, font: {size: 12, color: '#1e293b'}, standoff: 12 };
             }
             
             const axisX = 'x' + (idx === 1 ? '' : idx);
             const axisY = 'y' + (idx === 1 ? '' : idx);
             
             if (r === c) {
+                // Diagonal: Restored previous clean histogram + KDE line
                 traces.push({
                     x: xData,
                     type: 'histogram',
@@ -509,39 +1014,23 @@ function renderStatistics() {
                     x: kde.x,
                     y: kde.y,
                     mode: 'lines',
+                    type: 'scatter',
                     line: {color: '#1e3a8a', width: 2},
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'skip'
                 });
-                
-            } else if (r < c) {
-                const corr = calculatePearson(xData, yData);
-                const absCorr = Math.abs(corr);
-                const color = corr > 0 ? `rgba(220, 38, 38, ${0.4 + absCorr*0.6})` : `rgba(37, 99, 235, ${0.4 + absCorr*0.6})`;
-                const fontSize = 12 + absCorr * 24;
-                
-                traces.push({
-                    x: [(minX + maxX) / 2],
-                    y: [(minY + maxY) / 2],
-                    text: [corr.toFixed(2)],
-                    mode: 'text',
-                    textfont: { size: fontSize, color: color, weight: 'bold' },
-                    xaxis: axisX,
-                    yaxis: axisY,
-                    hoverinfo: 'skip'
-                });
-                
             } else {
+                // Lower Triangle: Scatter plot + Linear Regression Trendline
                 traces.push({
                     x: xData,
                     y: yData,
                     mode: 'markers',
                     type: 'scatter',
-                    marker: { color: 'rgba(59, 130, 246, 0.6)', size: 5, line: {color: 'white', width: 0.5} },
+                    marker: { color: 'rgba(37, 99, 235, 0.65)', size: 5, line: {color: 'white', width: 0.5} },
                     xaxis: axisX,
                     yaxis: axisY,
-                    text: labels,
+                    text: getActiveLabels(),
                     hovertemplate: '%{text}<br>X: %{x:.2f}<br>Y: %{y:.2f}<extra></extra>'
                 });
                 
@@ -551,7 +1040,7 @@ function renderStatistics() {
                     y: [reg.m * minX + reg.b, reg.m * maxX + reg.b],
                     mode: 'lines',
                     type: 'scatter',
-                    line: { color: '#ef4444', width: 2 },
+                    line: { color: '#dc2626', width: 2 },
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'skip'
@@ -559,23 +1048,79 @@ function renderStatistics() {
             }
         }
     }
+    layout.shapes = shapes;
     
     Plotly.newPlot('splom-container', traces, layout, {responsive: true, displaylogo: false});
 }
 
-function calculatePearson(x, y) {
+function normalCDF(z) {
+    const t = 1 / (1 + 0.2316419 * Math.abs(z));
+    const d = 0.3989423 * Math.exp(-z * z / 2);
+    const prob = d * t * (0.3193815 + t * (-0.3565638 + t * (1.781478 + t * (-1.821256 + t * 1.330274))));
+    return z > 0 ? 1 - prob : prob;
+}
+
+function calculatePearsonWithPValue(x, y) {
     const n = x.length;
+    if (n < 3) return { r: 0, p: 1, stars: '' };
     let sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0, sum_y2 = 0;
-    for(let i=0; i<n; i++) {
+    for(let i = 0; i < n; i++) {
         sum_x += x[i];
         sum_y += y[i];
-        sum_xy += x[i]*y[i];
-        sum_x2 += x[i]*x[i];
-        sum_y2 += y[i]*y[i];
+        sum_xy += x[i] * y[i];
+        sum_x2 += x[i] * x[i];
+        sum_y2 += y[i] * y[i];
     }
-    const numerator = n * sum_xy - sum_x * sum_y;
-    const denominator = Math.sqrt((n*sum_x2 - sum_x*sum_x) * (n*sum_y2 - sum_y*sum_y));
-    return denominator === 0 ? 0 : numerator / denominator;
+    const num = n * sum_xy - sum_x * sum_y;
+    const den = Math.sqrt((n * sum_x2 - sum_x * sum_x) * (n * sum_y2 - sum_y * sum_y));
+    if (den === 0) return { r: 0, p: 1, stars: '' };
+    
+    const r = Math.max(-1, Math.min(1, num / den));
+    const df = n - 2;
+    const absR = Math.abs(r);
+    if (absR >= 0.99999) return { r: r, p: 0, stars: '***' };
+    
+    const t = absR * Math.sqrt(df / (1 - absR * absR));
+    const z = (1 - 1 / (4 * df)) * t / Math.sqrt(1 + t * t / (2 * df));
+    const p = 2 * (1 - normalCDF(Math.abs(z)));
+    
+    let stars = '';
+    if (p < 0.001) stars = '***';
+    else if (p < 0.01) stars = '**';
+    else if (p < 0.05) stars = '*';
+    else if (p < 0.1) stars = '.';
+    
+    return { r, p, stars };
+}
+
+function calculateCorrelationWithPValue(x, y) {
+    if (typeof corrMethod !== 'undefined' && corrMethod === 'spearman') {
+        return calculateSpearmanWithPValue(x, y);
+    }
+    return calculatePearsonWithPValue(x, y);
+}
+
+function calculateSpearmanWithPValue(x, y) {
+    const getRanks = (arr) => {
+        const sorted = arr.map((v, i) => ({v, i})).sort((a, b) => a.v - b.v);
+        const ranks = new Array(arr.length);
+        let i = 0;
+        while (i < sorted.length) {
+            let j = i;
+            while (j < sorted.length - 1 && sorted[j].v === sorted[j+1].v) j++;
+            const avgRank = (i + j + 2) / 2.0; // 1-based index
+            for (let k = i; k <= j; k++) {
+                ranks[sorted[k].i] = avgRank;
+            }
+            i = j + 1;
+        }
+        return ranks;
+    };
+    return calculatePearsonWithPValue(getRanks(x), getRanks(y));
+}
+
+function calculatePearson(x, y) {
+    return calculatePearsonWithPValue(x, y).r;
 }
 
 function calculateLinearRegression(x, y) {
@@ -727,10 +1272,15 @@ function determineOptimalK(data) {
 function runPCA() {
     try {
         const activeFeatures = getActiveFeatures();
+        const activeLabels = getActiveLabels();
         const X = getActiveNumericData();
         
         if (activeFeatures.length < 2) {
             alert("主成分分析を実行するには、少なくとも2つ以上の変数を選択してください。");
+            return;
+        }
+        if (activeLabels.length < 3) {
+            alert("主成分分析を実行するには、少なくとも3つ以上のサンプル（都市）を選択してください。");
             return;
         }
         
@@ -779,6 +1329,8 @@ function runPCA() {
         
         pcaResult = {
             X: X,
+            labels: activeLabels,
+            features: activeFeatures,
             scores: scores,
             loadings: factorLoadings,
             explainedVar: explainedVar,
@@ -848,6 +1400,7 @@ function updatePlot() {
     const showLabels = document.getElementById('show-labels') ? document.getElementById('show-labels').checked : true;
     const showVectors = document.getElementById('show-vectors') ? document.getElementById('show-vectors').checked : true;
     const enableClustering = document.getElementById('enable-clustering') ? document.getElementById('enable-clustering').checked : true;
+    const plotLabels = pcaResult.labels || getActiveLabels();
     
     const globalPositions = [];
     if (showLabels) {
@@ -897,7 +1450,7 @@ function updatePlot() {
             if(ptCluster === c) {
                 cX.push(scoresX[i]);
                 cY.push(scoresY[i]);
-                cText.push(labels[i]);
+                cText.push(plotLabels[i]);
                 if(showLabels) cPos.push(globalPositions[i]);
             }
         }
