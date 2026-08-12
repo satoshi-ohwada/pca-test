@@ -195,6 +195,12 @@
                         </select>
                     </div>
 
+                    <div class="control-group" id="z-axis-group" style="display: none;">
+                        <label for="axis-z-select">奥行き (Z軸)</label>
+                        <select id="axis-z-select" class="form-select">
+                        </select>
+                    </div>
+
                     <div class="control-group">
                         <label for="plot-title">グラフのタイトル</label>
                         <input type="text" id="plot-title" value="PCA バイプロット" style="width: 100%; padding: 0.5rem; border-radius: 4px; border: 1px solid var(--border); box-sizing: border-box;">
@@ -228,9 +234,13 @@
                             <input type="checkbox" id="enable-clustering" checked style="margin-right: 0.5rem; width: auto;">
                             クラスタリングの適用 (色分け)
                         </label>
-                        <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal;">
+                        <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
                             <input type="checkbox" id="show-labels" checked style="margin-right: 0.5rem; width: auto;">
                             データ点のラベルを表示
+                        </label>
+                        <label style="display: flex; align-items: center; cursor: pointer; font-weight: 600; margin-bottom: 0.5rem; color: var(--primary);">
+                            <input type="checkbox" id="enable-3d" style="margin-right: 0.5rem; width: auto;">
+                            🧊 3Dモードを有効にする (試験機能)
                         </label>
                         <hr style="margin: 0.75rem 0; border: none; border-top: 1px solid var(--border);">
                         <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">

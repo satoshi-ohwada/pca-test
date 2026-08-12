@@ -72,6 +72,9 @@ const resultsSection = document.getElementById('results-section');
 const uploadSection = document.getElementById('upload-section');
 const axisXSelect = document.getElementById('axis-x-select');
 const axisYSelect = document.getElementById('axis-y-select');
+const axisZSelect = document.getElementById('axis-z-select');
+const zAxisGroup = document.getElementById('z-axis-group');
+const enable3dCheck = document.getElementById('enable-3d');
 const plotTitleInput = document.getElementById('plot-title');
 const vectorScale = document.getElementById('vector-scale');
 const vectorScaleVal = document.getElementById('vector-scale-val');
@@ -157,6 +160,19 @@ if (btnUseSample) {
 if (btnRunPca) btnRunPca.addEventListener('click', runPCA);
 if (axisXSelect) axisXSelect.addEventListener('change', updatePlot);
 if (axisYSelect) axisYSelect.addEventListener('change', updatePlot);
+if (axisZSelect) axisZSelect.addEventListener('change', updatePlot);
+
+if (enable3dCheck) {
+    enable3dCheck.addEventListener('change', (e) => {
+        if (e.target.checked) {
+            if (zAxisGroup) zAxisGroup.style.display = 'block';
+        } else {
+            if (zAxisGroup) zAxisGroup.style.display = 'none';
+        }
+        if (pcaResult) updatePlot();
+    });
+}
+
 if (vectorScale) {
     vectorScale.addEventListener('input', (e) => {
         currentScale = parseFloat(e.target.value);
@@ -1537,6 +1553,7 @@ function setupSelects(numComponents) {
     
     axisXSelect.innerHTML = '';
     axisYSelect.innerHTML = '';
+    if (axisZSelect) axisZSelect.innerHTML = '';
     
     for (let i = 0; i < maxComp; i++) {
         const option1 = document.createElement('option');
@@ -1550,26 +1567,41 @@ function setupSelects(numComponents) {
         option2.textContent = `第${i+1}主成分 (PC${i+1})`;
         if (i === 1) option2.selected = true;
         axisYSelect.appendChild(option2);
+        
+        if (axisZSelect) {
+            const option3 = document.createElement('option');
+            option3.value = i;
+            option3.textContent = `第${i+1}主成分 (PC${i+1})`;
+            if (i === 2 || (i === 1 && maxComp < 3)) option3.selected = true;
+            axisZSelect.appendChild(option3);
+        }
     }
 }
 
 function updatePlot() {
     if (!pcaResult) return;
     
+    const is3D = document.getElementById('enable-3d') ? document.getElementById('enable-3d').checked : false;
+    
     const xIdx = parseInt(axisXSelect.value);
     const yIdx = parseInt(axisYSelect.value);
+    const zIdx = (is3D && document.getElementById('axis-z-select')) ? parseInt(document.getElementById('axis-z-select').value) : 0;
     
     const varX = (pcaResult.explainedVar[xIdx] * 100).toFixed(1);
     const varY = (pcaResult.explainedVar[yIdx] * 100).toFixed(1);
+    const varZ = is3D ? (pcaResult.explainedVar[zIdx] * 100).toFixed(1) : "0";
     
     const scoresX = pcaResult.scores.map(row => row[xIdx]);
     const scoresY = pcaResult.scores.map(row => row[yIdx]);
+    const scoresZ = is3D ? pcaResult.scores.map(row => row[zIdx]) : [];
     
     const loadingsX = pcaResult.loadings.map(row => row[xIdx]);
     const loadingsY = pcaResult.loadings.map(row => row[yIdx]);
+    const loadingsZ = is3D ? pcaResult.loadings.map(row => row[zIdx]) : [];
     
     const topX = getTopContributors(loadingsX);
     const topY = getTopContributors(loadingsY);
+    const topZ = is3D ? getTopContributors(loadingsZ) : "";
     
     const showLabels = document.getElementById('show-labels') ? document.getElementById('show-labels').checked : true;
     const showVectors = document.getElementById('show-vectors') ? document.getElementById('show-vectors').checked : true;
@@ -1577,7 +1609,7 @@ function updatePlot() {
     const plotLabels = pcaResult.labels || getActiveLabels();
     
     const globalPositions = [];
-    if (showLabels) {
+    if (showLabels && !is3D) {
         const xMin = Math.min(...scoresX);
         const xMax = Math.max(...scoresX);
         const yMin = Math.min(...scoresY);
@@ -1618,187 +1650,240 @@ function updatePlot() {
     const numClusters = enableClustering ? (Math.max(...pcaResult.clusters) + 1) : 1;
     
     for(let c = 0; c < numClusters; c++) {
-        const cX = [], cY = [], cText = [], cPos = [];
+        const cX = [], cY = [], cZ = [], cText = [], cPos = [];
         for(let i=0; i<pcaResult.clusters.length; i++) {
             const ptCluster = enableClustering ? pcaResult.clusters[i] : 0;
             if(ptCluster === c) {
                 cX.push(scoresX[i]);
                 cY.push(scoresY[i]);
+                if (is3D) cZ.push(scoresZ[i]);
                 cText.push(plotLabels[i]);
-                if(showLabels) cPos.push(globalPositions[i]);
+                if(showLabels && !is3D) cPos.push(globalPositions[i]);
             }
         }
         if(cX.length > 0) {
-            // Render ellipse background FIRST so markers and text sit cleanly on top
-            const ellipse = enableClustering ? getEllipsePoints(cX, cY, 100, 2.0) : null;
-            if (ellipse) {
-                traces.push({
-                    x: ellipse.x,
-                    y: ellipse.y,
-                    mode: 'lines',
-                    type: 'scatter',
-                    name: `クラスタ ${c+1} 領域`,
-                    line: { color: colors[c % colors.length], width: 1.5 },
-                    fill: 'toself',
-                    fillcolor: colors[c % colors.length],
-                    opacity: 0.12,
-                    showlegend: false,
-                    hoverinfo: 'skip'
-                });
+            if (!is3D && enableClustering) {
+                const ellipse = getEllipsePoints(cX, cY, 100, 2.0);
+                if (ellipse) {
+                    traces.push({
+                        x: ellipse.x,
+                        y: ellipse.y,
+                        mode: 'lines',
+                        type: 'scatter',
+                        name: `クラスタ ${c+1} 領域`,
+                        line: { color: colors[c % colors.length], width: 1.5 },
+                        fill: 'toself',
+                        fillcolor: colors[c % colors.length],
+                        opacity: 0.12,
+                        showlegend: false,
+                        hoverinfo: 'skip'
+                    });
+                }
             }
 
-            // Render markers and text labels SECOND (foreground)
-            traces.push({
+            const trace = {
                 x: cX,
                 y: cY,
-                mode: showLabels ? 'markers+text' : 'markers',
-                type: 'scatter',
+                mode: showLabels ? (is3D ? 'markers+text' : 'markers+text') : 'markers',
+                type: is3D ? 'scatter3d' : 'scatter',
                 name: enableClustering ? `クラスタ ${c+1}` : 'データ点',
                 text: cText,
-                textposition: showLabels ? cPos : undefined,
                 marker: { 
-                    size: 10, 
+                    size: is3D ? 6 : 10, 
                     color: colors[c % colors.length], 
                     opacity: 0.95,
-                    line: { color: '#ffffff', width: 1.5 }
+                    line: { color: '#ffffff', width: is3D ? 0 : 1.5 }
                 },
                 textfont: { size: 11, color: '#1e293b' }
-            });
+            };
+            if (is3D) trace.z = cZ;
+            if (!is3D && showLabels) trace.textposition = cPos;
+            traces.push(trace);
         }
     }
     
     const maxX = Math.max(...scoresX.map(Math.abs));
     const maxY = Math.max(...scoresY.map(Math.abs));
-    const maxScore = Math.max(maxX, maxY) || 1;
+    const maxZ = is3D ? Math.max(...scoresZ.map(Math.abs)) : 0;
+    const maxScore = Math.max(maxX, Math.max(maxY, maxZ)) || 1;
     
-    const maxLoading = Math.max(...loadingsX.map(Math.abs), ...loadingsY.map(Math.abs)) || 1;
+    const maxLoading = Math.max(...loadingsX.map(Math.abs), ...loadingsY.map(Math.abs), ...(is3D ? loadingsZ.map(Math.abs) : [0])) || 1;
     const scalingFactor = (maxScore / maxLoading) * 0.8 * currentScale;
     
     const annotations = [];
     
     if (showVectors) {
         const activeFeatures = getActiveFeatures();
-        const vecData = [];
-        for (let i = 0; i < activeFeatures.length; i++) {
-            const lx = loadingsX[i] * scalingFactor;
-            const ly = loadingsY[i] * scalingFactor;
-            const angle = Math.atan2(ly, lx);
-            const dist = Math.sqrt(lx * lx + ly * ly);
-            vecData.push({
-                feature: activeFeatures[i],
-                lx: lx,
-                ly: ly,
-                angle: angle,
-                dist: dist,
-                rawIdx: i
-            });
-        }
-
-        // Sort by angle to detect overlapping directions
-        vecData.sort((a, b) => a.angle - b.angle);
-
-        // Assign stagger indices for close angles
-        for (let k = 0; k < vecData.length; k++) {
-            const current = vecData[k];
-            let sameClusterIndex = 0;
-            for (let j = k - 1; j >= 0; j--) {
-                let diff = Math.abs(current.angle - vecData[j].angle);
-                if (diff > Math.PI) diff = 2 * Math.PI - diff;
-                if (diff < 0.25) { // approx 14 degrees
-                    sameClusterIndex++;
-                } else {
-                    break;
-                }
+        
+        if (is3D) {
+            const vecX = [], vecY = [], vecZ = [], vecText = [];
+            for (let i = 0; i < activeFeatures.length; i++) {
+                const lx = loadingsX[i] * scalingFactor;
+                const ly = loadingsY[i] * scalingFactor;
+                const lz = loadingsZ[i] * scalingFactor;
+                
+                traces.push({
+                    x: [0, lx],
+                    y: [0, ly],
+                    z: [0, lz],
+                    mode: 'lines',
+                    type: 'scatter3d',
+                    line: { color: '#ef4444', width: 4 },
+                    showlegend: false,
+                    hoverinfo: 'skip'
+                });
+                
+                vecX.push(lx);
+                vecY.push(ly);
+                vecZ.push(lz);
+                vecText.push(`<b>${activeFeatures[i]}</b>`);
             }
-            current.staggerIndex = sameClusterIndex;
-        }
-
-        for (let k = 0; k < vecData.length; k++) {
-            const v = vecData[k];
-            const lx = v.lx;
-            const ly = v.ly;
             
-            // Arrow annotation
-            annotations.push({
-                x: lx,
-                y: ly,
-                ax: 0,
-                ay: 0,
-                xref: 'x',
-                yref: 'y',
-                axref: 'x',
-                ayref: 'y',
-                showarrow: true,
-                arrowcolor: '#ef4444',
-                arrowhead: 2, 
-                arrowsize: 1.5,
-                arrowwidth: 2,
-                standoff: 0,
-                startstandoff: 0
+            traces.push({
+                x: vecX,
+                y: vecY,
+                z: vecZ,
+                mode: 'text',
+                type: 'scatter3d',
+                text: vecText,
+                textfont: { color: '#dc2626', size: 12 },
+                showlegend: false,
+                hoverinfo: 'skip'
             });
+            
+        } else {
+            const vecData = [];
+            for (let i = 0; i < activeFeatures.length; i++) {
+                const lx = loadingsX[i] * scalingFactor;
+                const ly = loadingsY[i] * scalingFactor;
+                const angle = Math.atan2(ly, lx);
+                const dist = Math.sqrt(lx * lx + ly * ly);
+                vecData.push({
+                    feature: activeFeatures[i],
+                    lx: lx,
+                    ly: ly,
+                    angle: angle,
+                    dist: dist,
+                    rawIdx: i
+                });
+            }
 
-            const baseShiftX = lx >= 0 ? 8 : -8;
-            const baseShiftY = ly >= 0 ? 8 : -8;
-            const staggerStep = v.staggerIndex * 20;
-            const extraX = Math.abs(lx) > Math.abs(ly) ? 0 : (lx >= 0 ? staggerStep : -staggerStep);
-            const extraY = Math.abs(lx) > Math.abs(ly) ? (ly >= 0 ? staggerStep : -staggerStep) : (ly >= 0 ? staggerStep : -staggerStep);
+            vecData.sort((a, b) => a.angle - b.angle);
 
-            annotations.push({
-                x: lx,
-                y: ly,
-                xref: 'x',
-                yref: 'y',
-                text: `<b>${v.feature}</b>`,
-                showarrow: false,
-                font: { color: '#dc2626', size: 11 },
-                xanchor: lx >= 0 ? 'left' : 'right',
-                yanchor: ly >= 0 ? 'bottom' : 'top',
-                xshift: baseShiftX + extraX,
-                yshift: baseShiftY + extraY,
-                bgcolor: 'rgba(255, 255, 255, 0.92)',
-                bordercolor: '#fca5a5',
-                borderwidth: 1,
-                borderpad: 3
+            for (let k = 0; k < vecData.length; k++) {
+                const current = vecData[k];
+                let sameClusterIndex = 0;
+                for (let j = k - 1; j >= 0; j--) {
+                    let diff = Math.abs(current.angle - vecData[j].angle);
+                    if (diff > Math.PI) diff = 2 * Math.PI - diff;
+                    if (diff < 0.25) { 
+                        sameClusterIndex++;
+                    } else {
+                        break;
+                    }
+                }
+                current.staggerIndex = sameClusterIndex;
+            }
+
+            for (let k = 0; k < vecData.length; k++) {
+                const v = vecData[k];
+                const lx = v.lx;
+                const ly = v.ly;
+                
+                annotations.push({
+                    x: lx,
+                    y: ly,
+                    ax: 0,
+                    ay: 0,
+                    xref: 'x',
+                    yref: 'y',
+                    axref: 'x',
+                    ayref: 'y',
+                    showarrow: true,
+                    arrowcolor: '#ef4444',
+                    arrowhead: 2, 
+                    arrowsize: 1.5,
+                    arrowwidth: 2,
+                    standoff: 0,
+                    startstandoff: 0
+                });
+
+                const baseShiftX = lx >= 0 ? 8 : -8;
+                const baseShiftY = ly >= 0 ? 8 : -8;
+                const staggerStep = v.staggerIndex * 20;
+                const extraX = Math.abs(lx) > Math.abs(ly) ? 0 : (lx >= 0 ? staggerStep : -staggerStep);
+                const extraY = Math.abs(lx) > Math.abs(ly) ? (ly >= 0 ? staggerStep : -staggerStep) : (ly >= 0 ? staggerStep : -staggerStep);
+
+                annotations.push({
+                    x: lx,
+                    y: ly,
+                    xref: 'x',
+                    yref: 'y',
+                    text: `<b>${v.feature}</b>`,
+                    showarrow: false,
+                    font: { color: '#dc2626', size: 11 },
+                    xanchor: lx >= 0 ? 'left' : 'right',
+                    yanchor: ly >= 0 ? 'bottom' : 'top',
+                    xshift: baseShiftX + extraX,
+                    yshift: baseShiftY + extraY,
+                    bgcolor: 'rgba(255, 255, 255, 0.92)',
+                    bordercolor: '#fca5a5',
+                    borderwidth: 1,
+                    borderpad: 3
+                });
+            }
+
+            traces.push({
+                x: vecData.map(v => v.lx),
+                y: vecData.map(v => v.ly),
+                mode: 'markers',
+                type: 'scatter',
+                name: 'ベクトル情報',
+                marker: { size: 10, color: '#ef4444', opacity: 0.01 },
+                text: vecData.map(v => `<b>${v.feature}</b><br>PC${xIdx+1} 因子負荷量: ${loadingsX[v.rawIdx].toFixed(2)}<br>PC${yIdx+1} 因子負荷量: ${loadingsY[v.rawIdx].toFixed(2)}`),
+                hoverinfo: 'text',
+                showlegend: false
             });
         }
-
-        // Hover trace for vectors
-        traces.push({
-            x: vecData.map(v => v.lx),
-            y: vecData.map(v => v.ly),
-            mode: 'markers',
-            type: 'scatter',
-            name: 'ベクトル情報',
-            marker: { size: 10, color: '#ef4444', opacity: 0.01 },
-            text: vecData.map(v => `<b>${v.feature}</b><br>PC${xIdx+1} 因子負荷量: ${loadingsX[v.rawIdx].toFixed(2)}<br>PC${yIdx+1} 因子負荷量: ${loadingsY[v.rawIdx].toFixed(2)}`),
-            hoverinfo: 'text',
-            showlegend: false
-        });
     }
     
     const customTitle = plotTitleInput ? plotTitleInput.value : 'PCA バイプロット';
     
-    const layout = {
+    let layout = {
         title: customTitle,
-        hovermode: 'closest',
-        xaxis: { 
+        margin: {l: 60, r: 50, b: 70, t: 50}
+    };
+    
+    if (is3D) {
+        layout.scene = {
+            xaxis: { title: `PC${xIdx+1} (${varX}%)`, zeroline: true },
+            yaxis: { title: `PC${yIdx+1} (${varY}%)`, zeroline: true },
+            zaxis: { title: `PC${zIdx+1} (${varZ}%)`, zeroline: true }
+        };
+        layout.margin = {l: 0, r: 0, b: 0, t: 50};
+    } else {
+        layout.hovermode = 'closest';
+        layout.xaxis = { 
             title: `PC${xIdx+1} (${varX}%)<br><span style="font-size:0.85em; color:gray">主な寄与: ${topX}</span>`, 
             zeroline: true 
-        },
-        yaxis: { 
+        };
+        layout.yaxis = { 
             title: `PC${yIdx+1} (${varY}%)<br><span style="font-size:0.85em; color:gray">主な寄与: ${topY}</span>`, 
             zeroline: true 
-        },
-        margin: {l: 60, r: 50, b: 70, t: 50},
-        annotations: annotations
-    };
+        };
+        layout.annotations = annotations;
+    }
     
     Plotly.newPlot('plot-container', traces, layout, {responsive: true, displaylogo: false});
     
-    updateSummary(xIdx, yIdx, parseFloat(varX), parseFloat(varY), topX, topY);
+    if (is3D) {
+        updateSummary(xIdx, yIdx, parseFloat(varX), parseFloat(varY), topX, topY, zIdx, parseFloat(varZ), topZ);
+    } else {
+        updateSummary(xIdx, yIdx, parseFloat(varX), parseFloat(varY), topX, topY);
+    }
 }
 
-function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
+function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
     const summaryText = document.getElementById('summary-text');
     if(!summaryText) return;
     
@@ -1838,13 +1923,18 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
         </p>`;
     }
 
+    const is3D = document.getElementById('enable-3d') ? document.getElementById('enable-3d').checked : false;
+    let combinedVar = (parseFloat(varX) + parseFloat(varY));
+    if (is3D) combinedVar += parseFloat(varZ);
+
     summaryText.innerHTML = `
         <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${transformText}</p>
         <p><strong>第${xIdx+1}主成分 (横軸)</strong> は、全体のデータの <strong>${varX}%</strong> の情報を説明しています。<br>
         この軸は主に <strong>「${topX}」</strong> の影響を強く受けています。</p>
         <p style="margin-top: 0.5rem;"><strong>第${yIdx+1}主成分 (縦軸)</strong> は、全体の <strong>${varY}%</strong> の情報を説明しています。<br>
         この軸は主に <strong>「${topY}」</strong> の影響を強く受けています。</p>
-        <p style="margin-top: 0.5rem;">2つの軸を合わせることで、全体の <strong>${(parseFloat(varX) + parseFloat(varY)).toFixed(1)}%</strong> の情報を一枚の図で表現できています。</p>
+        ${is3D ? `<p style="margin-top: 0.5rem;"><strong>第${zIdx+1}主成分 (Z軸)</strong> は、全体の <strong>${varZ}%</strong> の情報を説明しています。<br>この軸は主に <strong>「${topZ}」</strong> の影響を強く受けています。</p>` : ''}
+        <p style="margin-top: 0.5rem;">選択した軸を合わせることで、全体の <strong>${combinedVar.toFixed(1)}%</strong> の情報を一枚の図で表現できています。</p>
         ${pcaInsightText}
         ${clusterInsightText}
         <p style="margin-top: 1rem;"><small style="color: var(--text-muted);">※赤い矢印（ベクトル）が長いほど、その変数がその方向に強く影響していることを示します。</small></p>
