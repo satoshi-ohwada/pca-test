@@ -9,7 +9,7 @@ let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
 let currentScale = 1.0;
-let isStandardized = true;
+
 let currentRelView = 'heatmap';
 
 function getActiveFeatures() {
@@ -351,7 +351,10 @@ if (btnViewHeatmap && btnViewSplom) {
         btnViewSplom.classList.remove('active');
         if (heatmapWrapper) heatmapWrapper.classList.remove('hidden');
         if (splomWrapper) splomWrapper.classList.add('hidden');
-        renderCorrelationHeatmap();
+        setTimeout(() => {
+            renderCorrelationHeatmap();
+            window.dispatchEvent(new Event('resize'));
+        }, 10);
     });
     btnViewSplom.addEventListener('click', () => {
         currentRelView = 'splom';
@@ -359,7 +362,10 @@ if (btnViewHeatmap && btnViewSplom) {
         btnViewHeatmap.classList.remove('active');
         if (splomWrapper) splomWrapper.classList.remove('hidden');
         if (heatmapWrapper) heatmapWrapper.classList.add('hidden');
-        renderSPLOM();
+        setTimeout(() => {
+            renderSPLOM();
+            window.dispatchEvent(new Event('resize'));
+        }, 10);
     });
 }
 
@@ -817,7 +823,7 @@ function renderBoxPlots() {
             insightDiv.style.background = '#fef2f2';
             insightDiv.style.borderLeft = '4px solid #ef4444';
             insightDiv.style.color = '#991b1b';
-            insightDiv.innerHTML = `⚠️ <strong>外れ値のアラート (1.5×IQR基準)</strong>: 以下の変数で極端な値（都市など）が検出されました。<br>${outlierSummary.join('<br>')}<br><span style="font-size:0.85em; color:#b91c1c; margin-top:0.25rem; display:block;">💡 上の「⚡ 検出された外れ値サンプルを一括除外」ボタンを押すことで、これらの特異な都市を分析からワンクリックで取り除くことができます。</span>`;
+            insightDiv.innerHTML = `⚠️ <strong>外れ値のアラート (1.5×IQR基準)</strong>: 以下の変数で極端な値（特定のサンプルなど）が検出されました。<br>${outlierSummary.join('<br>')}<br><span style="font-size:0.85em; color:#b91c1c; margin-top:0.25rem; display:block;">💡 上の「⚡ 検出された外れ値サンプルを一括除外」ボタンを押すことで、これらの特異なサンプルを分析からワンクリックで取り除くことができます。</span>`;
         } else {
             insightDiv.style.background = '#f0fdf4';
             insightDiv.style.borderLeft = '4px solid #22c55e';
@@ -880,7 +886,7 @@ function renderSampleCheckboxPanel() {
                 disabledLabels.delete(lbl);
             } else {
                 if (getActiveLabels().length <= 3) {
-                    alert("分析には最低3つのサンプル（都市）が必要です。");
+                    alert("分析には最低3つのサンプル（データ行）が必要です。");
                     e.target.checked = true;
                     return;
                 }
@@ -1280,14 +1286,31 @@ function runPCA() {
             return;
         }
         if (activeLabels.length < 3) {
-            alert("主成分分析を実行するには、少なくとも3つ以上のサンプル（都市）を選択してください。");
+            alert("主成分分析を実行するには、少なくとも3つ以上のサンプル（データ行）を選択してください。");
             return;
         }
         
         const n = X.length;
         const p = X[0].length;
         
-        const cov = numeric.dot(numeric.transpose(X), X);
+        // --- 修正箇所: データの中心化 ---
+        // (transformMode === 'none'の場合等、中心化されていないデータでも正しい共分散行列を計算するため)
+        const Xc = [];
+        const means = [];
+        for (let j = 0; j < p; j++) {
+            let sum = 0;
+            for (let i = 0; i < n; i++) sum += X[i][j];
+            means.push(sum / n);
+        }
+        for (let i = 0; i < n; i++) {
+            Xc.push([...X[i]]);
+            for (let j = 0; j < p; j++) {
+                Xc[i][j] -= means[j];
+            }
+        }
+        
+        // 中心化済みデータを用いて共分散行列を計算
+        const cov = numeric.dot(numeric.transpose(Xc), Xc);
         for (let i = 0; i < p; i++) {
             for (let j = 0; j < p; j++) cov[i][j] /= (n - 1);
         }
@@ -1309,7 +1332,7 @@ function runPCA() {
         const totalVar = eigenValues.reduce((a, b) => a + b, 0);
         const explainedVar = eigenValues.map(v => v / totalVar);
         
-        const scores = numeric.dot(X, eigenVectors);
+        const scores = numeric.dot(Xc, eigenVectors);
         
         const factorLoadings = [];
         for (let i = 0; i < p; i++) {
@@ -1619,16 +1642,23 @@ function updatePlot() {
     
     Plotly.newPlot('plot-container', traces, layout, {responsive: true, displaylogo: false});
     
-    updateSummary(xIdx, yIdx, varX, varY, topX, topY);
+    updateSummary(xIdx, yIdx, parseFloat(varX), parseFloat(varY), topX, topY);
 }
 
 function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
     const summaryText = document.getElementById('summary-text');
     if(!summaryText) return;
     
-    const stdText = isStandardized 
-        ? "<span style='color: var(--primary); font-weight: 600;'>※ Z得点による標準化データを使用</span>" 
-        : "<span style='color: var(--text-muted); font-weight: 600;'>※ 標準化なし（生データ）を使用</span>";
+    let transformText = "";
+    if (transformMode === 'std') {
+        transformText = "<span style='color: var(--primary); font-weight: 600;'>※ Z得点による標準化データを使用</span>";
+    } else if (transformMode === 'log') {
+        transformText = "<span style='color: var(--primary); font-weight: 600;'>※ 対数変換＋標準化データを使用</span>";
+    } else if (transformMode === 'robust') {
+        transformText = "<span style='color: var(--primary); font-weight: 600;'>※ ロバスト標準化データを使用</span>";
+    } else {
+        transformText = "<span style='color: var(--text-muted); font-weight: 600;'>※ 標準化なし（生データ）を使用</span>";
+    }
         
     let pcaInsightText = "";
     let clusterInsightText = "";
@@ -1639,11 +1669,13 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
         let cum = 0;
         const cumRatios = ev.map(v => { cum += (v / totalVar) * 100; return cum; });
         
-        const kaiserCount = ev.filter(v => v >= 1.0).length || 1;
+        const avgEigen = totalVar / ev.length;
+        const kaiserCount = ev.filter(v => v >= avgEigen).length || 1;
         const kaiserCum = cumRatios[kaiserCount - 1].toFixed(1);
         pcaInsightText = `<p style="margin-top: 0.75rem; background: #eff6ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #3b82f6; font-size: 0.9em;">
-            <strong>📐 次元（主成分数）判定の根拠:</strong><br>
-            カイザー基準（固有値 ≥ 1.0）により <strong>PC1〜PC${kaiserCount} (${kaiserCount}次元)</strong> の採用を推奨（累積寄与率: <strong>${kaiserCum}%</strong>）。
+            <strong>【次元数の判定 (平均固有値基準)】</strong><br>
+            第1〜第${kaiserCount}主成分までで、全体の分散の <strong>${kaiserCum}%</strong> を説明できています（情報量の維持率）。<br>
+            ※目安として、固有値が平均(${avgEigen.toFixed(2)})以上となる主成分を採用することが推奨されます。
         </p>`;
         
         const optK = pcaResult.optimalK || 1;
@@ -1654,7 +1686,7 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY) {
     }
 
     summaryText.innerHTML = `
-        <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${stdText}</p>
+        <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${transformText}</p>
         <p><strong>第${xIdx+1}主成分 (横軸)</strong> は、全体のデータの <strong>${varX}%</strong> の情報を説明しています。<br>
         この軸は主に <strong>「${topX}」</strong> の影響を強く受けています。</p>
         <p style="margin-top: 0.5rem;"><strong>第${yIdx+1}主成分 (縦軸)</strong> は、全体の <strong>${varY}%</strong> の情報を説明しています。<br>
@@ -1690,8 +1722,8 @@ function downloadCsv() {
     }
     csvContent += "\n";
     
-    for (let i = 0; i < labels.length; i++) {
-        csvContent += `${labels[i]},${pcaResult.clusters[i] + 1},`;
+    for (let i = 0; i < pcaResult.labels.length; i++) {
+        csvContent += `${pcaResult.labels[i]},${pcaResult.clusters[i] + 1},`;
         for (let j = 0; j < pcaResult.scores[i].length; j++) {
             csvContent += `${pcaResult.scores[i][j]},`;
         }
@@ -1823,7 +1855,8 @@ function renderDataDiagnosis() {
         const x = activeData.map(r => r[i]);
         for (let j = i + 1; j < p; j++) {
             const y = activeData.map(r => r[j]);
-            const corr = calculatePearson(x, y);
+            const corrInfo = calculateCorrelationWithPValue(x, y);
+            const corr = corrInfo.r;
             const absCorr = Math.abs(corr);
             pairs.push({ f1: activeFeatures[i], f2: activeFeatures[j], corr, absCorr });
             sumAbsCorr += absCorr;
@@ -1908,7 +1941,8 @@ function renderScreePlot() {
     
     const xLabels = eigenValues.map((_, i) => `PC${i+1}`);
     
-    const kaiserCount = eigenValues.filter(v => v >= 1.0).length || 1;
+    const avgEigen = totalVar / eigenValues.length;
+    const kaiserCount = eigenValues.filter(v => v >= avgEigen).length || 1;
     let cum80Count = cumRatios.findIndex(c => c >= 80) + 1;
     if (cum80Count === 0) cum80Count = eigenValues.length;
     
@@ -1950,11 +1984,11 @@ function renderScreePlot() {
         hovertemplate: '<b>%{x}</b><br>累積寄与率: %{y:.2f}%<extra></extra>'
     };
 
-    // カイザー基準線 (固有値 = 1.0)
+    // カイザー基準線 (平均固有値)
     const traceKaiser = {
         x: [xLabels[0], xLabels[xLabels.length - 1]],
-        y: [1.0, 1.0],
-        name: 'カイザー基準線 (固有値=1.0)',
+        y: [avgEigen, avgEigen],
+        name: `平均固有値基準線 (${avgEigen.toFixed(2)})`,
         type: 'scatter',
         mode: 'lines',
         line: { color: '#d97706', width: 1.5, dash: 'dash' },
@@ -2000,7 +2034,7 @@ function renderScreePlot() {
                 y: eigenValues[Math.min(kaiserCount - 1, eigenValues.length - 1)],
                 xref: 'x',
                 yref: 'y',
-                text: `💡 カイザー基準適合: PC1〜PC${kaiserCount}<br>(固有値 ≥ 1.0 達成)`,
+                text: `💡 平均固有値基準適合: PC1〜PC${kaiserCount}<br>(固有値 ≥ ${avgEigen.toFixed(2)} 達成)`,
                 showarrow: true,
                 arrowhead: 2,
                 ax: 40,
