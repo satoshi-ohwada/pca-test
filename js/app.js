@@ -753,6 +753,7 @@ function renderCorrelationHeatmap() {
         annotations: annotations
     };
     
+    Plotly.purge('heatmap-container');
     Plotly.newPlot('heatmap-container', [trace], layout, {responsive: true, displaylogo: false});
 }
 
@@ -849,6 +850,7 @@ function renderBoxPlots() {
         showlegend: false
     };
     
+    Plotly.purge('boxplot-container');
     Plotly.newPlot('boxplot-container', traces, layout, {responsive: true, displaylogo: false});
     renderSampleCheckboxPanel();
 }
@@ -1056,6 +1058,7 @@ function renderSPLOM() {
     }
     layout.shapes = shapes;
     
+    Plotly.purge('splom-container');
     Plotly.newPlot('splom-container', traces, layout, {responsive: true, displaylogo: false});
 }
 
