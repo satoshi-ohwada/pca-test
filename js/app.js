@@ -3,8 +3,8 @@ let rawNumericData = [];
 let labels = [];
 let features = null;
 let disabledFeatures = new Set();
-let disabledLabels = new Set();
-let detectedOutlierLabels = new Set();
+let disabledRowIndices = new Set();
+let detectedOutlierIndices = new Set();
 let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
@@ -19,7 +19,7 @@ function getActiveFeatures() {
 
 function getActiveLabels() {
     if (!labels) return [];
-    return labels.filter(l => !disabledLabels.has(l));
+    return getActiveRowIndices().map(i => labels[i]);
 }
 
 function getActiveNumericData() {
@@ -30,12 +30,36 @@ function getActiveNumericData() {
     });
     
     const activeData = [];
-    labels.forEach((label, rIdx) => {
-        if (!disabledLabels.has(label)) {
-            activeData.push(activeColIndices.map(cIdx => numericData[rIdx][cIdx]));
-        }
+    getActiveRowIndices().forEach(rIdx => {
+        activeData.push(activeColIndices.map(cIdx => numericData[rIdx][cIdx]));
     });
     return activeData;
+}
+
+function getActiveRowIndices() {
+    const indices = [];
+    if (labels && numericData && numericData.length > 0) {
+        const activeColIndices = [];
+        features.forEach((f, idx) => {
+            if (!disabledFeatures.has(f)) activeColIndices.push(idx);
+        });
+        
+        labels.forEach((_, i) => {
+            if (!disabledRowIndices.has(i)) {
+                let hasMissing = false;
+                for (const cIdx of activeColIndices) {
+                    if (isNaN(numericData[i][cIdx]) || numericData[i][cIdx] === null) {
+                        hasMissing = true;
+                        break;
+                    }
+                }
+                if (!hasMissing) {
+                    indices.push(i);
+                }
+            }
+        });
+    }
+    return indices;
 }
 
 // DOM Elements
@@ -182,8 +206,8 @@ if (btnReset) {
         transformMode = 'std';
         corrMethod = 'pearson';
         disabledFeatures = new Set();
-        disabledLabels = new Set();
-        detectedOutlierLabels = new Set();
+        disabledRowIndices = new Set();
+        detectedOutlierIndices = new Set();
         
         const transformSelect = document.getElementById('transform-mode-select');
         const transformSelect2 = document.getElementById('transform-mode-select-step2');
@@ -294,11 +318,11 @@ document.querySelectorAll('input[name="corr-method"]').forEach(radio => {
 const btnExcludeOutliers = document.getElementById('btn-exclude-outliers');
 if (btnExcludeOutliers) {
     btnExcludeOutliers.addEventListener('click', () => {
-        if (detectedOutlierLabels.size === 0) {
+        if (detectedOutlierIndices.size === 0) {
             alert("現在、1.5×IQR基準を超える外れ値サンプルは検出されていません。");
             return;
         }
-        detectedOutlierLabels.forEach(lbl => disabledLabels.add(lbl));
+        detectedOutlierIndices.forEach(idx => disabledRowIndices.add(idx));
         refreshAllVisualizations();
     });
 }
@@ -306,7 +330,7 @@ if (btnExcludeOutliers) {
 const btnResetSampleExclusion = document.getElementById('btn-reset-sample-exclusion');
 if (btnResetSampleExclusion) {
     btnResetSampleExclusion.addEventListener('click', () => {
-        disabledLabels.clear();
+        disabledRowIndices.clear();
         refreshAllVisualizations();
     });
 }
@@ -434,7 +458,17 @@ function processRawData(data) {
         }
         
         const headerRow = data[0];
-        features = headerRow.slice(1);
+        const validColIndices = [];
+        const featureNames = [];
+        
+        for (let j = 1; j < headerRow.length; j++) {
+            const colName = String(headerRow[j] || '').trim();
+            if (colName !== '') {
+                validColIndices.push(j);
+                featureNames.push(colName);
+            }
+        }
+        features = featureNames;
         
         const rawLabels = [];
         const parsedNumeric = [];
@@ -443,21 +477,21 @@ function processRawData(data) {
             const row = data[i];
             if (!row || row.length === 0 || !row[0]) continue;
             
-            rawLabels.push(String(row[0]).trim() || `Row ${i}`);
-            
             const numericRow = [];
-            for (let j = 1; j < headerRow.length; j++) {
+            for (const j of validColIndices) {
                 const val = parseFloat(row[j]);
-                numericRow.push(isNaN(val) ? 0 : val);
+                numericRow.push(val); // Will push NaN if missing or invalid
             }
+            
+            rawLabels.push(String(row[0]).trim() || `Row ${i}`);
             parsedNumeric.push(numericRow);
         }
         
         labels = rawLabels;
         rawNumericData = parsedNumeric;
         disabledFeatures = new Set();
-        disabledLabels = new Set();
-        detectedOutlierLabels = new Set();
+        disabledRowIndices = new Set();
+        detectedOutlierIndices = new Set();
         pcaResult = null;
         
         applyStandardization();
@@ -478,56 +512,107 @@ function applyStandardization() {
     const p = rawNumericData[0].length;
     
     numericData = JSON.parse(JSON.stringify(rawNumericData)); 
-    if (transformMode === 'none') return;
+    
+    // First, let's compute mean and stdDev for centering even in 'none' mode (optional, but wait... 'none' mode centers now)
+    
+    if (transformMode === 'none') {
+        for (let j = 0; j < p; j++) {
+            let sum = 0, count = 0;
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    sum += numericData[i][j];
+                    count++;
+                }
+            }
+            const mean = count > 0 ? sum / count : 0;
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    numericData[i][j] -= mean;
+                }
+            }
+        }
+        return;
+    }
     
     if (transformMode === 'log') {
         for (let j = 0; j < p; j++) {
             let minVal = Infinity;
             for (let i = 0; i < n; i++) {
-                if (numericData[i][j] < minVal) minVal = numericData[i][j];
+                if (!isNaN(numericData[i][j]) && numericData[i][j] < minVal) minVal = numericData[i][j];
             }
             const shift = minVal < 0 ? Math.abs(minVal) + 1 : 0;
             for (let i = 0; i < n; i++) {
-                numericData[i][j] = Math.log(numericData[i][j] + shift + 1);
+                if (!isNaN(numericData[i][j])) {
+                    numericData[i][j] = Math.log(numericData[i][j] + shift + 1);
+                }
             }
         }
         for (let j = 0; j < p; j++) {
-            let sum = 0;
-            for (let i = 0; i < n; i++) sum += numericData[i][j];
-            const mean = sum / n;
-            let sumSq = 0;
-            for (let i = 0; i < n; i++) sumSq += Math.pow(numericData[i][j] - mean, 2);
-            const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)) || 1;
+            let sum = 0, count = 0;
             for (let i = 0; i < n; i++) {
-                numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+                if (!isNaN(numericData[i][j])) {
+                    sum += numericData[i][j];
+                    count++;
+                }
+            }
+            const mean = count > 0 ? sum / count : 0;
+            let sumSq = 0;
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    sumSq += Math.pow(numericData[i][j] - mean, 2);
+                }
+            }
+            const stdDev = Math.sqrt(sumSq / (count > 1 ? count - 1 : 1)) || 1;
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+                }
             }
         }
     } else if (transformMode === 'robust') {
         for (let j = 0; j < p; j++) {
             const col = [];
-            for (let i = 0; i < n; i++) col.push(numericData[i][j]);
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) col.push(numericData[i][j]);
+            }
             col.sort((a, b) => a - b);
-            const mid = Math.floor(n / 2);
-            const median = n % 2 !== 0 ? col[mid] : (col[mid - 1] + col[mid]) / 2;
-            const q1 = col[Math.floor(n * 0.25)];
-            const q3 = col[Math.floor(n * 0.75)];
+            const count = col.length;
+            if (count === 0) continue;
+            const mid = Math.floor(count / 2);
+            const median = count % 2 !== 0 ? col[mid] : (col[mid - 1] + col[mid]) / 2;
+            const q1 = col[Math.floor(count * 0.25)];
+            const q3 = col[Math.floor(count * 0.75)];
             const iqr = (q3 - q1) || 1;
             for (let i = 0; i < n; i++) {
-                numericData[i][j] = (numericData[i][j] - median) / iqr;
+                if (!isNaN(numericData[i][j])) {
+                    numericData[i][j] = (numericData[i][j] - median) / iqr;
+                }
             }
         }
     } else {
+        // 'std' mode
         for (let j = 0; j < p; j++) {
-            let sum = 0;
-            for (let i = 0; i < n; i++) sum += numericData[i][j];
-            const mean = sum / n;
+            let sum = 0, count = 0;
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    sum += numericData[i][j];
+                    count++;
+                }
+            }
+            const mean = count > 0 ? sum / count : 0;
             
             let sumSq = 0;
-            for (let i = 0; i < n; i++) sumSq += Math.pow(numericData[i][j] - mean, 2);
-            const stdDev = Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)) || 1; 
+            for (let i = 0; i < n; i++) {
+                if (!isNaN(numericData[i][j])) {
+                    sumSq += Math.pow(numericData[i][j] - mean, 2);
+                }
+            }
+            const stdDev = Math.sqrt(sumSq / (count > 1 ? count - 1 : 1)) || 1; 
             
             for (let i = 0; i < n; i++) {
-                numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+                if (!isNaN(numericData[i][j])) {
+                    numericData[i][j] = (numericData[i][j] - mean) / stdDev;
+                }
             }
         }
     }
@@ -590,7 +675,7 @@ function renderStatistics() {
             }
         } else {
             labels.forEach((lbl, rIdx) => {
-                if (!disabledLabels.has(lbl)) {
+                if (!disabledRowIndices.has(rIdx)) {
                     const val = numericData[rIdx][j];
                     colData.push(val);
                     if (val < min) min = val;
@@ -771,16 +856,37 @@ function renderBoxPlots() {
     if (badgeSpan) {
         const total = labels.length;
         const activeCount = activeLabels.length;
-        const excludedCount = disabledLabels.size;
-        badgeSpan.textContent = `全 ${total} サンプル中 ${activeCount} サンプル分析対象 (${excludedCount} 件除外中)`;
-        badgeSpan.style.background = excludedCount > 0 ? '#fef3c7' : '#f1f5f9';
-        badgeSpan.style.color = excludedCount > 0 ? '#92400e' : '#334155';
-        badgeSpan.style.borderColor = excludedCount > 0 ? '#f59e0b' : '#cbd5e1';
+        
+        const activeColIndices = [];
+        features.forEach((f, i) => {
+            if (!disabledFeatures.has(f)) activeColIndices.push(i);
+        });
+        
+        let missingExcludedCount = 0;
+        labels.forEach((_, i) => {
+            if (!disabledRowIndices.has(i)) {
+                for (const cIdx of activeColIndices) {
+                    if (isNaN(numericData[i][cIdx]) || numericData[i][cIdx] === null) {
+                        missingExcludedCount++;
+                        break;
+                    }
+                }
+            }
+        });
+        
+        const manualExcludedCount = disabledRowIndices.size;
+        const totalExcluded = manualExcludedCount + missingExcludedCount;
+        
+        badgeSpan.textContent = `全 ${total} サンプル中 ${activeCount} サンプル分析対象 (手動除外: ${manualExcludedCount}件 / 欠測除外: ${missingExcludedCount}件)`;
+        badgeSpan.style.background = totalExcluded > 0 ? '#fef3c7' : '#f1f5f9';
+        badgeSpan.style.color = totalExcluded > 0 ? '#92400e' : '#334155';
+        badgeSpan.style.borderColor = totalExcluded > 0 ? '#f59e0b' : '#cbd5e1';
     }
 
     const traces = [];
     const outlierSummary = [];
-    detectedOutlierLabels = new Set();
+    detectedOutlierIndices = new Set();
+    const activeRowIndices = getActiveRowIndices();
     
     activeFeatures.forEach((feat, j) => {
         const colData = activeData.map(row => row[j]);
@@ -796,9 +902,10 @@ function renderBoxPlots() {
         const featOutlierLabels = [];
         colData.forEach((val, rIdx) => {
             if (val < lowerBound || val > upperBound) {
+                const origIdx = activeRowIndices[rIdx];
                 const lblName = activeLabels[rIdx];
                 featOutlierLabels.push(lblName);
-                detectedOutlierLabels.add(lblName);
+                detectedOutlierIndices.add(origIdx);
             }
         });
         
@@ -821,15 +928,15 @@ function renderBoxPlots() {
     
     if (insightDiv) {
         if (outlierSummary.length > 0) {
-            insightDiv.style.background = '#fef2f2';
-            insightDiv.style.borderLeft = '4px solid #ef4444';
-            insightDiv.style.color = '#991b1b';
-            insightDiv.innerHTML = `⚠️ <strong>外れ値のアラート (1.5×IQR基準)</strong>: 以下の変数で極端な値（特定のサンプルなど）が検出されました。<br>${outlierSummary.join('<br>')}<br><span style="font-size:0.85em; color:#b91c1c; margin-top:0.25rem; display:block;">💡 上の「⚡ 検出された外れ値サンプルを一括除外」ボタンを押すことで、これらの特異なサンプルを分析からワンクリックで取り除くことができます。</span>`;
+            insightDiv.style.background = '#f8fafc';
+            insightDiv.style.borderLeft = '4px solid #8b5cf6';
+            insightDiv.style.color = '#4c1d95';
+            insightDiv.innerHTML = `💡 <strong>特徴的なデータ (1.5×IQR基準)</strong>: 以下の変数で、他と比べて際立った値（特異値）を持つサンプルが検出されました。<br>${outlierSummary.join('<br>')}<br><span style="font-size:0.85em; color:#5b21b6; margin-top:0.25rem; display:block;">ℹ️ 麺類が飛び抜けて好きな都市など、これらの特徴的なサンプルに焦点を当てて分析する場合はこのまま進めてください。<br>全体的な一般的な傾向のみを分析したい場合は、上の「⚡ 特徴的なサンプル（特異値）を分析から一括除外」ボタンで除外することも可能です。</span>`;
         } else {
             insightDiv.style.background = '#f0fdf4';
             insightDiv.style.borderLeft = '4px solid #22c55e';
             insightDiv.style.color = '#166534';
-            insightDiv.innerHTML = `✅ <strong>分布チェック結果</strong>: 1.5×IQR基準を超える明らかな外れ値は検出されませんでした（良好な状態）。`;
+            insightDiv.innerHTML = `✅ <strong>分布チェック結果</strong>: 1.5×IQR基準を超える際立った特異値を持つサンプルは検出されませんでした。`;
         }
     }
     
@@ -862,37 +969,59 @@ function renderSampleCheckboxPanel() {
     const searchVal = (document.getElementById('sample-search-input')?.value || '').toLowerCase().trim();
     container.innerHTML = '';
     
-    labels.forEach(lbl => {
+    const activeColIndices = [];
+    features.forEach((f, i) => {
+        if (!disabledFeatures.has(f)) activeColIndices.push(i);
+    });
+
+    labels.forEach((lbl, idx) => {
         if (searchVal && !lbl.toLowerCase().includes(searchVal)) return;
-        const isChecked = !disabledLabels.has(lbl);
-        const isOutlier = detectedOutlierLabels.has(lbl);
+        
+        let hasMissing = false;
+        for (const cIdx of activeColIndices) {
+            if (isNaN(numericData[idx][cIdx]) || numericData[idx][cIdx] === null) {
+                hasMissing = true;
+                break;
+            }
+        }
+        
+        const isManuallyDisabled = disabledRowIndices.has(idx);
+        const isChecked = !isManuallyDisabled && !hasMissing;
+        const isOutlier = detectedOutlierIndices.has(idx);
         
         const labelEl = document.createElement('label');
         labelEl.style.cssText = 'display: flex; align-items: center; font-size: 0.82rem; cursor: pointer; user-select: none; gap: 0.3rem; margin: 0;';
-        if (isOutlier) {
+        
+        if (hasMissing) {
+            labelEl.style.opacity = '0.5';
+            labelEl.style.cursor = 'not-allowed';
+            labelEl.title = '現在選択中の変数に欠測があるため自動除外されています';
+        } else if (isOutlier) {
             labelEl.style.fontWeight = 'bold';
-            labelEl.style.color = '#dc2626';
+            labelEl.style.color = '#8b5cf6';
         }
         
         labelEl.innerHTML = `
-            <input type="checkbox" class="sample-checkbox" data-label="${lbl}" ${isChecked ? 'checked' : ''} style="width: auto; margin-right: 0.2rem;">
-            <span>${lbl}</span> ${isOutlier ? '<span title="外れ値として検出">⚠️</span>' : ''}
+            <input type="checkbox" class="sample-checkbox" data-index="${idx}" ${isChecked ? 'checked' : ''} ${hasMissing ? 'disabled' : ''} style="width: auto; margin-right: 0.2rem;">
+            <span>${lbl}</span> 
+            ${isOutlier ? '<span title="特徴的な値（特異値）を持つサンプル">💡</span>' : ''}
+            ${hasMissing ? '<span title="欠測値あり" style="font-size:0.75rem; background:#cbd5e1; color:white; padding:0 4px; border-radius:3px;">欠測</span>' : ''}
         `;
         container.appendChild(labelEl);
     });
     
     container.querySelectorAll('.sample-checkbox').forEach(cb => {
         cb.addEventListener('change', (e) => {
-            const lbl = e.target.dataset.label;
+            const origIdx = parseInt(e.target.dataset.index);
             if (e.target.checked) {
-                disabledLabels.delete(lbl);
+                disabledRowIndices.delete(origIdx);
             } else {
                 if (getActiveLabels().length <= 3) {
                     alert("分析には最低3つのサンプル（データ行）が必要です。");
                     e.target.checked = true;
                     return;
                 }
-                disabledLabels.add(lbl);
+                disabledRowIndices.add(origIdx);
             }
             refreshAllVisualizations();
         });
@@ -1027,6 +1156,25 @@ function renderSPLOM() {
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'skip'
+                });
+            } else if (r < c) {
+                // Upper Triangle: Correlation value
+                const corrInfo = calculateCorrelationWithPValue(xData, yData);
+                const valText = corrInfo.r.toFixed(2) + corrInfo.stars;
+                const pStr = corrInfo.p < 0.001 ? '< 0.001' : corrInfo.p.toFixed(4);
+                const fontColor = Math.abs(corrInfo.r) > 0.65 ? '#ffffff' : '#0f172a';
+                
+                traces.push({
+                    x: [(minX + maxX) / 2],
+                    y: [(minY + maxY) / 2],
+                    text: [`<b>${valText}</b>`],
+                    mode: 'text',
+                    type: 'scatter',
+                    textfont: { size: activeP > 5 ? 12 : 16, color: fontColor },
+                    xaxis: axisX,
+                    yaxis: axisY,
+                    hoverinfo: 'text',
+                    hovertext: `相関係数: ${corrInfo.r.toFixed(4)}<br>p値: ${pStr}<extra></extra>`
                 });
             } else {
                 // Lower Triangle: Scatter plot + Linear Regression Trendline
@@ -1585,6 +1733,8 @@ function updatePlot() {
                 arrowhead: 2, 
                 arrowsize: 1.5,
                 arrowwidth: 2,
+                standoff: 0,
+                startstandoff: 0
             });
 
             const baseShiftX = lx >= 0 ? 8 : -8;
