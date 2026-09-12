@@ -43,9 +43,70 @@
                 </div>
             </div>
             
-            <div style="text-align: center; margin-top: 1rem;">
-                <p class="subtitle" style="font-size: 0.9rem; margin-bottom: 0.5rem;">または</p>
-                <button id="btn-use-sample" class="btn" style="background-color: var(--text-muted);">サンプルデータ (都道府県庁所在市別 麺類の好み) を使用する</button>
+            <div style="margin-top: 1.5rem; border-top: 1px dashed var(--border); padding-top: 1.25rem;">
+                <h3 style="font-size: 1rem; margin-bottom: 0.35rem; display: flex; align-items: center; gap: 0.4rem;">
+                    💡 すぐに試せる定番サンプルデータ（4種）
+                </h3>
+                <p style="font-size: 0.83rem; color: var(--text-muted); margin-bottom: 0.85rem;">
+                    多変量解析（PCA）の教育や実務で広く使われる代表的なデータセットです。クリックするとCSVファイルが読み込まれます。
+                </p>
+                <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0.75rem;">
+                    <!-- サンプル1: 都道府県別体力測定データ -->
+                    <div class="sample-card" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <strong style="font-size: 0.92rem; color: #1e293b;">🏃 都道府県別 体力測定データ</strong>
+                                <span style="background: #e0f2fe; color: #0369a1; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 600;">運動能力</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #475569; line-height: 1.45; margin: 0 0 0.6rem 0;">
+                                47都道府県の種目別平均記録（握力、50m走、持久走等）。<strong>「総合基礎体力 (PC1)」</strong>と<strong>「瞬発・筋力型 vs 持久・敏捷型 (PC2)」</strong>の対比が綺麗に現れます。
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-load-sample" data-file="data/prefecture_fitness.csv" style="width: 100%; font-size: 0.85rem; padding: 0.45rem; background: #2563eb; color: white;">このデータを読み込む</button>
+                    </div>
+
+                    <!-- サンプル2: 自動車スペック比較データ -->
+                    <div class="sample-card" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <strong style="font-size: 0.92rem; color: #1e293b;">🚗 自動車スペック比較データ</strong>
+                                <span style="background: #fef3c7; color: #92400e; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 600;">製品分析</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #475569; line-height: 1.45; margin: 0 0 0.6rem 0;">
+                                代表車種35台の排気量・馬力・車重・燃費・加速性能。<strong>「パワー・サイズ vs 燃費」</strong>のトレードオフと<strong>「加速・スポーツ性能」</strong>のポジショニングが分かります。
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-load-sample" data-file="data/car_specs.csv" style="width: 100%; font-size: 0.85rem; padding: 0.45rem; background: #d97706; color: white;">このデータを読み込む</button>
+                    </div>
+
+                    <!-- サンプル3: ワイン成分分析データ -->
+                    <div class="sample-card" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <strong style="font-size: 0.92rem; color: #1e293b;">🍷 ワイン成分分析データ (UCI)</strong>
+                                <span style="background: #fae8ff; color: #86198f; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 600;">分類・品質</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #475569; line-height: 1.45; margin: 0 0 0.6rem 0;">
+                                3品種のワインの多次元化学成分（アルコール、ポリフェノール等）。多次元データをPC1・PC2の2軸に集約するだけで<strong>3つのブドウ品種（クラスタ）が鮮明に分離</strong>します。
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-load-sample" data-file="data/wine_data.csv" style="width: 100%; font-size: 0.85rem; padding: 0.45rem; background: #9333ea; color: white;">このデータを読み込む</button>
+                    </div>
+
+                    <!-- サンプル4: 都道府県庁所在市別 麺類の好み -->
+                    <div class="sample-card" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 8px; padding: 0.85rem; display: flex; flex-direction: column; justify-content: space-between;">
+                        <div>
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.35rem;">
+                                <strong style="font-size: 0.92rem; color: #1e293b;">🍜 都道府県庁所在市別 麺類消費</strong>
+                                <span style="background: #dcfce7; color: #166534; font-size: 0.72rem; padding: 0.15rem 0.5rem; border-radius: 9999px; font-weight: 600;">地域文化</span>
+                            </div>
+                            <p style="font-size: 0.8rem; color: #475569; line-height: 1.45; margin: 0 0 0.6rem 0;">
+                                家計調査による52都市の麺類支出額（うどん・そば・中華麺等）。<strong>「うどん・そば文化（高松など） vs ラーメン文化（盛岡・山形など）」</strong>の地域嗜好の差が可視化されます。
+                            </p>
+                        </div>
+                        <button type="button" class="btn btn-load-sample" data-file="data/noodle_data.csv" style="width: 100%; font-size: 0.85rem; padding: 0.45rem; background: #059669; color: white;">このデータを読み込む</button>
+                    </div>
+                </div>
             </div>
 
             <div id="data-preview" class="hidden">
@@ -207,15 +268,28 @@
                     </div>
 
                     <div class="control-group">
-                        <label for="vector-scale">因子負荷量のスケーリング</label>
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <label for="vector-scale">因子負荷量のスケーリング</label>
+                            <span id="vector-scale-val" style="font-size: 0.85em; color: var(--text-muted); font-weight: 600;">x1.0</span>
+                        </div>
                         <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; line-height: 1.4;">ベクトルの長さ（見た目の強調度）を調整します。</p>
-                        <input type="range" id="vector-scale" min="0.1" max="5" step="0.1" value="1">
-                        <span id="vector-scale-val" style="font-size: 0.85em; color: var(--text-muted);">x1.0</span>
+                        <div class="slider-btn-group">
+                            <button type="button" class="btn-slider-step" id="btn-vector-scale-dec" title="減らす (-0.1)" aria-label="減らす">-</button>
+                            <input type="range" id="vector-scale" min="0.1" max="5" step="0.1" value="1">
+                            <button type="button" class="btn-slider-step" id="btn-vector-scale-inc" title="増やす (+0.1)" aria-label="増やす">+</button>
+                        </div>
                     </div>
 
                     <div class="control-group">
-                        <label for="cluster-count">クラスタ数 (K-Means): <span id="cluster-value">3</span></label>
-                        <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
+                        <div style="display: flex; justify-content: space-between; align-items: center;">
+                            <label for="cluster-count">クラスタ数 (K-Means):</label>
+                            <span id="cluster-value" style="font-size: 0.9em; font-weight: 700; color: var(--primary);">3</span>
+                        </div>
+                        <div class="slider-btn-group">
+                            <button type="button" class="btn-slider-step" id="btn-cluster-count-dec" title="減らす (-1)" aria-label="減らす">-</button>
+                            <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
+                            <button type="button" class="btn-slider-step" id="btn-cluster-count-inc" title="増やす (+1)" aria-label="増やす">+</button>
+                        </div>
                     </div>
                     
                     <div class="control-group" style="margin-top: 1rem;">

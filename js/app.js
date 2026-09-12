@@ -117,15 +117,19 @@ if (fileInput) {
     });
 }
 
-if (btnUseSample) {
-    btnUseSample.addEventListener('click', () => {
-        const parseAndProcess = (csvText) => {
+function loadSampleCsvFile(filePath) {
+    fetch(filePath + '?v=' + Date.now())
+        .then(res => {
+            if (!res.ok) throw new Error("HTTP " + res.status + " " + res.statusText);
+            return res.text();
+        })
+        .then(csvText => {
             Papa.parse(csvText, {
                 complete: function(results) {
                     if (results.data && results.data.length >= 3) {
                         processRawData(results.data);
                     } else {
-                        alert("サンプルデータのパースに失敗しました。データ形式を確認してください。");
+                        alert("CSVデータのパースに失敗しました。行数が足りないか形式が不正です。");
                     }
                 },
                 error: function(err) {
@@ -134,32 +138,51 @@ if (btnUseSample) {
                 header: false,
                 skipEmptyLines: true
             });
-        };
+        })
+        .catch(err => {
+            console.error("fetch sample error:", err);
+            alert("サンプルデータ（" + filePath + "）の読み込みに失敗しました。\n\n【ヒント】\nブラウザの直接ファイル参照（file://）ではブラウザのセキュリティ制限（CORS）によりfetchがブロックされる場合があります。\n付属の「./start_server.sh」を実行してローカルサーバー（http://localhost:8000）からアクセスするか、「data/」フォルダ内のCSVファイルを画面上のドロップゾーンにドラッグ＆ドロップしてください。");
+        });
+}
 
-        const csvInMemory = (typeof sampleCsv !== 'undefined' && sampleCsv) ? sampleCsv : (typeof window !== 'undefined' ? window.sampleCsv : null);
-        if (csvInMemory && csvInMemory.length > 50) {
-            parseAndProcess(csvInMemory);
-            return;
+document.querySelectorAll('.btn-load-sample').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+        const filePath = e.currentTarget.dataset.file;
+        if (filePath) {
+            loadSampleCsvFile(filePath);
         }
+    });
+});
 
-        fetch('js/sample_data.csv?v=' + Date.now())
-            .then(res => {
-                if (!res.ok) throw new Error("HTTP Status " + res.status);
-                return res.text();
-            })
-            .then(text => {
-                parseAndProcess(text);
-            })
-            .catch(err => {
-                console.error("fetch sample error:", err);
-                alert("サンプルデータの読み込み（fetch）に失敗しました: " + err.message + "\n※ 「1. データセット・インポート」エリアのファイル選択またはExcel貼り付け機能もお試しください。");
-            });
+if (btnUseSample) {
+    btnUseSample.addEventListener('click', () => {
+        loadSampleCsvFile('data/noodle_data.csv');
     });
 }
 
 if (btnRunPca) btnRunPca.addEventListener('click', runPCA);
-if (axisXSelect) axisXSelect.addEventListener('change', updatePlot);
-if (axisYSelect) axisYSelect.addEventListener('change', updatePlot);
+if (axisXSelect) {
+    axisXSelect.addEventListener('change', () => {
+        if (axisYSelect && axisXSelect.value === axisYSelect.value) {
+            const options = Array.from(axisYSelect.options).map(o => o.value);
+            const other = options.find(val => val !== axisXSelect.value);
+            if (other !== undefined) axisYSelect.value = other;
+        }
+        updatePlot();
+        renderLoadingsChart();
+    });
+}
+if (axisYSelect) {
+    axisYSelect.addEventListener('change', () => {
+        if (axisXSelect && axisYSelect.value === axisXSelect.value) {
+            const options = Array.from(axisXSelect.options).map(o => o.value);
+            const other = options.find(val => val !== axisYSelect.value);
+            if (other !== undefined) axisXSelect.value = other;
+        }
+        updatePlot();
+        renderLoadingsChart();
+    });
+}
 if (axisZSelect) axisZSelect.addEventListener('change', updatePlot);
 
 if (enable3dCheck) {
@@ -217,6 +240,56 @@ if (clusterCount) {
     clusterCount.addEventListener('change', handleClusterChange);
 }
 
+// スライダーの＋／ーボタン処理
+function setupSliderStepButtons(sliderId, decBtnId, incBtnId) {
+    const slider = document.getElementById(sliderId);
+    const decBtn = document.getElementById(decBtnId);
+    const incBtn = document.getElementById(incBtnId);
+    if (!slider || !decBtn || !incBtn) return;
+
+    const updateButtonStates = () => {
+        const val = parseFloat(slider.value);
+        const min = parseFloat(slider.min);
+        const max = parseFloat(slider.max);
+        if (!isNaN(min)) decBtn.disabled = val <= min;
+        if (!isNaN(max)) incBtn.disabled = val >= max;
+    };
+
+    const adjustValue = (direction) => {
+        const step = parseFloat(slider.step) || 1;
+        const min = slider.min !== "" ? parseFloat(slider.min) : -Infinity;
+        const max = slider.max !== "" ? parseFloat(slider.max) : Infinity;
+        let val = parseFloat(slider.value) || 0;
+
+        const stepStr = slider.step || "1";
+        const decimals = stepStr.includes(".") ? stepStr.split(".")[1].length : 0;
+
+        val += direction * step;
+        if (decimals > 0) {
+            val = parseFloat(val.toFixed(decimals));
+        }
+        if (val < min) val = min;
+        if (val > max) val = max;
+
+        if (parseFloat(slider.value) !== val) {
+            slider.value = val;
+            slider.dispatchEvent(new Event("input", { bubbles: true }));
+            slider.dispatchEvent(new Event("change", { bubbles: true }));
+        }
+        updateButtonStates();
+    };
+
+    decBtn.addEventListener('click', () => adjustValue(-1));
+    incBtn.addEventListener('click', () => adjustValue(1));
+    slider.addEventListener('input', updateButtonStates);
+    slider.addEventListener('change', updateButtonStates);
+
+    updateButtonStates();
+}
+
+setupSliderStepButtons('vector-scale', 'btn-vector-scale-dec', 'btn-vector-scale-inc');
+setupSliderStepButtons('cluster-count', 'btn-cluster-count-dec', 'btn-cluster-count-inc');
+
 if (btnReset) {
     btnReset.addEventListener('click', () => {
         transformMode = 'std';
@@ -258,6 +331,7 @@ if (btnReset) {
         numericData = [];
         labels = [];
         features = null;
+        pcaResult = null;
         if (uploadSection) uploadSection.classList.remove('hidden');
         if (resultsSection) resultsSection.classList.add('hidden');
         if (dataPreview) dataPreview.classList.add('hidden');
@@ -529,33 +603,21 @@ function applyStandardization() {
     
     numericData = JSON.parse(JSON.stringify(rawNumericData)); 
     
-    // First, let's compute mean and stdDev for centering even in 'none' mode (optional, but wait... 'none' mode centers now)
-    
+    // 'none' モード: 生データをそのまま保持（中心化は runPCA 内部の Xc でのみ実行）
     if (transformMode === 'none') {
-        for (let j = 0; j < p; j++) {
-            let sum = 0, count = 0;
-            for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
-                    sum += numericData[i][j];
-                    count++;
-                }
-            }
-            const mean = count > 0 ? sum / count : 0;
-            for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
-                    numericData[i][j] -= mean;
-                }
-            }
-        }
         return;
     }
     
     if (transformMode === 'log') {
+        // 対数変換のシフト幅（アクティブサンプルの最小値に基づく）
         for (let j = 0; j < p; j++) {
             let minVal = Infinity;
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j]) && numericData[i][j] < minVal) minVal = numericData[i][j];
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j]) && numericData[i][j] < minVal) {
+                    minVal = numericData[i][j];
+                }
             }
+            if (minVal === Infinity) minVal = 0;
             const shift = minVal < 0 ? Math.abs(minVal) + 1 : 0;
             for (let i = 0; i < n; i++) {
                 if (!isNaN(numericData[i][j])) {
@@ -563,10 +625,11 @@ function applyStandardization() {
                 }
             }
         }
+        // 対数変換後のアクティブサンプル平均・標準偏差で標準化
         for (let j = 0; j < p; j++) {
             let sum = 0, count = 0;
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
                     sum += numericData[i][j];
                     count++;
                 }
@@ -574,7 +637,7 @@ function applyStandardization() {
             const mean = count > 0 ? sum / count : 0;
             let sumSq = 0;
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
                     sumSq += Math.pow(numericData[i][j] - mean, 2);
                 }
             }
@@ -586,10 +649,13 @@ function applyStandardization() {
             }
         }
     } else if (transformMode === 'robust') {
+        // ロバスト標準化: アクティブサンプルの中央値と四分位範囲 (IQR)
         for (let j = 0; j < p; j++) {
             const col = [];
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) col.push(numericData[i][j]);
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                    col.push(numericData[i][j]);
+                }
             }
             col.sort((a, b) => a - b);
             const count = col.length;
@@ -606,11 +672,11 @@ function applyStandardization() {
             }
         }
     } else {
-        // 'std' mode
+        // 'std' mode: アクティブサンプルの平均・標準偏差
         for (let j = 0; j < p; j++) {
             let sum = 0, count = 0;
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
                     sum += numericData[i][j];
                     count++;
                 }
@@ -619,7 +685,7 @@ function applyStandardization() {
             
             let sumSq = 0;
             for (let i = 0; i < n; i++) {
-                if (!isNaN(numericData[i][j])) {
+                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
                     sumSq += Math.pow(numericData[i][j] - mean, 2);
                 }
             }
@@ -666,39 +732,27 @@ function renderStatistics() {
     if (!tbody) return;
     tbody.innerHTML = '';
     
-    const activeNumeric = getActiveNumericData();
-    const activeLabels = getActiveLabels();
     const activeFeatures = getActiveFeatures();
+    const activeLabels = getActiveLabels();
     
-    if (!activeNumeric || activeNumeric.length === 0 || !features) return;
+    if (!rawNumericData || rawNumericData.length === 0 || !features) return;
     
-    const n = activeNumeric.length;
     const p = features.length;
     
     for (let j = 0; j < p; j++) {
         let min = Infinity, max = -Infinity, sum = 0;
-        let colData = [];
+        const colData = [];
         
-        const colIdxInActive = activeFeatures.indexOf(features[j]);
-        
-        if (colIdxInActive !== -1) {
-            for (let i = 0; i < n; i++) {
-                const val = activeNumeric[i][colIdxInActive];
-                colData.push(val);
-                if (val < min) min = val;
-                if (val > max) max = val;
-                sum += val;
-            }
-        } else {
-            labels.forEach((lbl, rIdx) => {
-                if (!disabledRowIndices.has(rIdx)) {
-                    const val = numericData[rIdx][j];
+        for (let i = 0; i < rawNumericData.length; i++) {
+            if (!disabledRowIndices.has(i)) {
+                const val = rawNumericData[i][j];
+                if (!isNaN(val) && val !== null) {
                     colData.push(val);
                     if (val < min) min = val;
                     if (val > max) max = val;
                     sum += val;
                 }
-            });
+            }
         }
         
         colData.sort((a, b) => a - b);
@@ -708,7 +762,7 @@ function renderStatistics() {
             median = colData.length % 2 !== 0 ? colData[mid] : (colData[mid - 1] + colData[mid]) / 2;
         }
         
-        const mean = sum / (colData.length || 1);
+        const mean = colData.length > 0 ? sum / colData.length : 0;
         let sumSq = 0;
         for (let i = 0; i < colData.length; i++) {
             sumSq += Math.pow(colData[i] - mean, 2);
@@ -722,11 +776,11 @@ function renderStatistics() {
                 <input type="checkbox" class="feature-checkbox" data-feature="${features[j]}" ${isChecked ? 'checked' : ''}>
             </td>
             <td><strong>${features[j]}</strong></td>
-            <td>${min.toFixed(2)}</td>
-            <td>${max.toFixed(2)}</td>
-            <td>${median.toFixed(2)}</td>
-            <td>${mean.toFixed(2)}</td>
-            <td>${stdDev.toFixed(2)}</td>
+            <td>${colData.length > 0 ? min.toFixed(2) : '-'}</td>
+            <td>${colData.length > 0 ? max.toFixed(2) : '-'}</td>
+            <td>${colData.length > 0 ? median.toFixed(2) : '-'}</td>
+            <td>${colData.length > 0 ? mean.toFixed(2) : '-'}</td>
+            <td>${colData.length > 0 ? stdDev.toFixed(2) : '-'}</td>
         `;
         tbody.appendChild(tr);
     }
@@ -769,6 +823,7 @@ function renderStatistics() {
 }
 
 function refreshAllVisualizations() {
+    applyStandardization();
     renderPreview();
     renderStatistics();
     renderDataDiagnosis();
@@ -1254,8 +1309,18 @@ function calculatePearsonWithPValue(x, y) {
     if (absR >= 0.99999) return { r: r, p: 0, stars: '***' };
     
     const t = absR * Math.sqrt(df / (1 - absR * absR));
-    const z = (1 - 1 / (4 * df)) * t / Math.sqrt(1 + t * t / (2 * df));
-    const p = 2 * (1 - normalCDF(Math.abs(z)));
+    let p;
+    if (df === 1) {
+        // コーシー分布の厳密両側p値: 2 * (0.5 - arctan(t)/pi)
+        p = 2 * (0.5 - Math.atan(t) / Math.PI);
+    } else if (df === 2) {
+        // df=2 の厳密両側p値: 2 * (0.5 - t / (2 * sqrt(2 + t^2)))
+        p = 2 * (0.5 - t / (2 * Math.sqrt(2 + t * t)));
+    } else {
+        const z = (1 - 1 / (4 * df)) * t / Math.sqrt(1 + t * t / (2 * df));
+        p = 2 * (1 - normalCDF(Math.abs(z)));
+    }
+    p = Math.max(0, Math.min(1, p));
     
     let stars = '';
     if (p < 0.001) stars = '***';
@@ -1298,6 +1363,7 @@ function calculatePearson(x, y) {
 
 function calculateLinearRegression(x, y) {
     const n = x.length;
+    if (n === 0) return { m: 0, b: 0 };
     let sum_x = 0, sum_y = 0, sum_xy = 0, sum_x2 = 0;
     for(let i=0; i<n; i++) {
         sum_x += x[i];
@@ -1305,17 +1371,22 @@ function calculateLinearRegression(x, y) {
         sum_xy += x[i]*y[i];
         sum_x2 += x[i]*x[i];
     }
-    const m = (n*sum_xy - sum_x*sum_y) / (n*sum_x2 - sum_x*sum_x);
+    const den = n*sum_x2 - sum_x*sum_x;
+    if (Math.abs(den) < 1e-12) {
+        return { m: 0, b: sum_y / n };
+    }
+    const m = (n*sum_xy - sum_x*sum_y) / den;
     const b = (sum_y - m*sum_x) / n;
     return {m, b};
 }
 
 function calculateKDE(data, steps=100) {
     const n = data.length;
+    if (n === 0) return { x: [], y: [] };
     const min = Math.min(...data);
     const max = Math.max(...data);
     const range = max - min;
-    const padding = range * 0.1;
+    const padding = range > 1e-12 ? range * 0.1 : 1.0;
     const xStart = min - padding;
     const xEnd = max + padding;
     const stepSize = (xEnd - xStart) / steps;
@@ -1326,7 +1397,8 @@ function calculateKDE(data, steps=100) {
     let sumSq = 0;
     data.forEach(v => sumSq += (v-mean)*(v-mean));
     const std = Math.sqrt(sumSq/n);
-    const h = 1.06 * std * Math.pow(n, -0.2); 
+    const effectiveStd = std > 1e-8 ? std : 0.5;
+    const h = 1.06 * effectiveStd * Math.pow(n, -0.2); 
     
     const xOut = [];
     const yOut = [];
@@ -1346,42 +1418,100 @@ function calculateKDE(data, steps=100) {
 }
 
 function kMeans(data, k, maxIter = 100) {
-    if(k <= 1 || data.length === 0) return {clusters: Array(data.length).fill(0)};
-    let centroids = [];
-    let indices = [];
-    while(indices.length < k && indices.length < data.length) {
-        let idx = Math.floor(Math.random() * data.length);
-        if(!indices.includes(idx)) { indices.push(idx); centroids.push([...data[idx]]); }
-    }
-    let clusters = Array(data.length).fill(0);
-    for(let iter = 0; iter < maxIter; iter++) {
-        let changed = false;
-        for(let i = 0; i < data.length; i++) {
-            let minD = Infinity, bestC = 0;
-            for(let c = 0; c < k; c++) {
+    const n = data.length;
+    if (k <= 1 || n === 0) return { clusters: Array(n).fill(0) };
+    const p = data[0].length;
+    
+    // k-means++ による初期重心の選択
+    const centroids = [];
+    const firstIdx = Math.floor(Math.random() * n);
+    centroids.push([...data[firstIdx]]);
+    
+    for (let c = 1; c < k; c++) {
+        const distSq = new Array(n);
+        let sumDistSq = 0;
+        for (let i = 0; i < n; i++) {
+            let minD = Infinity;
+            for (let j = 0; j < centroids.length; j++) {
                 let d = 0;
-                for(let j = 0; j < data[i].length; j++) {
-                    d += Math.pow(data[i][j] - centroids[c][j], 2);
+                for (let dIdx = 0; dIdx < p; dIdx++) {
+                    const diff = data[i][dIdx] - centroids[j][dIdx];
+                    d += diff * diff;
                 }
-                if(d < minD) { minD = d; bestC = c; }
+                if (d < minD) minD = d;
             }
-            if(clusters[i] !== bestC) { clusters[i] = bestC; changed = true; }
+            distSq[i] = minD;
+            sumDistSq += minD;
         }
-        if(!changed) break;
         
-        let sums = Array(k).fill(0).map(() => Array(data[0].length).fill(0));
-        let counts = Array(k).fill(0);
-        for(let i = 0; i < data.length; i++) {
-            counts[clusters[i]]++;
-            for(let j = 0; j < data[i].length; j++) sums[clusters[i]][j] += data[i][j];
+        if (sumDistSq <= 1e-12) {
+            centroids.push([...data[Math.floor(Math.random() * n)]]);
+            continue;
         }
-        for(let c = 0; c < k; c++) {
-            if(counts[c] > 0) {
-                for(let j = 0; j < sums[c].length; j++) centroids[c][j] = sums[c][j] / counts[c];
+        
+        let target = Math.random() * sumDistSq;
+        let chosenIdx = n - 1;
+        for (let i = 0; i < n; i++) {
+            target -= distSq[i];
+            if (target <= 0) {
+                chosenIdx = i;
+                break;
+            }
+        }
+        centroids.push([...data[chosenIdx]]);
+    }
+    
+    let clusters = new Array(n).fill(0);
+    for (let iter = 0; iter < maxIter; iter++) {
+        let changed = false;
+        for (let i = 0; i < n; i++) {
+            let minD = Infinity, bestC = 0;
+            for (let c = 0; c < k; c++) {
+                let d = 0;
+                for (let j = 0; j < p; j++) {
+                    const diff = data[i][j] - centroids[c][j];
+                    d += diff * diff;
+                }
+                if (d < minD) { minD = d; bestC = c; }
+            }
+            if (clusters[i] !== bestC) {
+                clusters[i] = bestC;
+                changed = true;
+            }
+        }
+        if (!changed) break;
+        
+        const sums = Array.from({ length: k }, () => new Array(p).fill(0));
+        const counts = new Array(k).fill(0);
+        for (let i = 0; i < n; i++) {
+            const cl = clusters[i];
+            counts[cl]++;
+            for (let j = 0; j < p; j++) sums[cl][j] += data[i][j];
+        }
+        
+        for (let c = 0; c < k; c++) {
+            if (counts[c] > 0) {
+                for (let j = 0; j < p; j++) centroids[c][j] = sums[c][j] / counts[c];
+            } else {
+                // 空クラスタ回復: 現在の重心から最も遠いデータ点を割り当てる
+                let maxD = -1, furthestIdx = 0;
+                for (let i = 0; i < n; i++) {
+                    let d = 0;
+                    const cl = clusters[i];
+                    for (let j = 0; j < p; j++) {
+                        const diff = data[i][j] - centroids[cl][j];
+                        d += diff * diff;
+                    }
+                    if (d > maxD) {
+                        maxD = d;
+                        furthestIdx = i;
+                    }
+                }
+                centroids[c] = [...data[furthestIdx]];
             }
         }
     }
-    return {clusters};
+    return { clusters };
 }
 
 function kMeansBest(data, k, nInit = 20) {
@@ -1422,10 +1552,14 @@ function determineOptimalK(data) {
     let maxK = Math.min(10, data.length - 1);
     for(let k = 1; k <= maxK; k++) {
         let best_w = Infinity;
-        for(let r = 0; r < 3; r++) {
+        for(let r = 0; r < 10; r++) {
             let res = kMeans(data, k);
             let w = calculateWCSS(data, res.clusters, k);
             if(w < best_w) best_w = w;
+        }
+        // WCSSの単調減少性を保証
+        if (wcss.length > 0 && best_w > wcss[wcss.length - 1]) {
+            best_w = wcss[wcss.length - 1];
         }
         wcss.push(best_w);
     }
@@ -1437,10 +1571,72 @@ function determineOptimalK(data) {
             if(d2 > maxDiff) { maxDiff = d2; bestK = i+1; }
         }
     }
-    const finalK = Math.max(1, Math.min(bestK, 5));
+    const finalK = Math.max(1, Math.min(bestK, maxK));
     return { optimalK: finalK, wcss: wcss };
 }
 
+
+// 実対称行列専用のヤコビ法による高精度・完全実数固有値計算
+function jacobiEigenvalues(matrix, maxIter = 100) {
+    const n = matrix.length;
+    let A = matrix.map(r => [...r]);
+    let V = Array.from({ length: n }, (_, i) => {
+        const row = new Array(n).fill(0);
+        row[i] = 1;
+        return row;
+    });
+
+    for (let iter = 0; iter < maxIter; iter++) {
+        let maxVal = 0;
+        let p = 0, q = 1;
+        for (let i = 0; i < n; i++) {
+            for (let j = i + 1; j < n; j++) {
+                const absVal = Math.abs(A[i][j]);
+                if (absVal > maxVal) {
+                    maxVal = absVal;
+                    p = i;
+                    q = j;
+                }
+            }
+        }
+        if (maxVal < 1e-14) break;
+
+        const app = A[p][p];
+        const aqq = A[q][q];
+        const apq = A[p][q];
+
+        const phi = 0.5 * Math.atan2(2 * apq, aqq - app);
+        const c = Math.cos(phi);
+        const s = Math.sin(phi);
+
+        for (let k = 0; k < n; k++) {
+            if (k !== p && k !== q) {
+                const akp = A[k][p];
+                const akq = A[k][q];
+                A[k][p] = A[p][k] = c * akp - s * akq;
+                A[k][q] = A[q][k] = s * akp + c * akq;
+            }
+        }
+        A[p][p] = c * c * app - 2 * s * c * apq + s * s * aqq;
+        A[q][q] = s * s * app + 2 * s * c * apq + c * c * aqq;
+        A[p][q] = A[q][p] = 0;
+
+        for (let k = 0; k < n; k++) {
+            const vkp = V[k][p];
+            const vkq = V[k][q];
+            V[k][p] = c * vkp - s * vkq;
+            V[k][q] = s * vkp + c * vkq;
+        }
+    }
+
+    const values = [];
+    const vectors = [];
+    for (let i = 0; i < n; i++) {
+        values.push(Math.max(0, A[i][i]));
+        vectors.push(V.map(row => row[i]));
+    }
+    return { values, vectors };
+}
 
 function runPCA() {
     try {
@@ -1460,8 +1656,7 @@ function runPCA() {
         const n = X.length;
         const p = X[0].length;
         
-        // --- 修正箇所: データの中心化 ---
-        // (transformMode === 'none'の場合等、中心化されていないデータでも正しい共分散行列を計算するため)
+        // データの中心化 (共分散行列の計算用)
         const Xc = [];
         const means = [];
         for (let j = 0; j < p; j++) {
@@ -1482,13 +1677,14 @@ function runPCA() {
             for (let j = 0; j < p; j++) cov[i][j] /= (n - 1);
         }
         
-        const eig = numeric.eig(cov);
+        // 対称ヤコビ法により実固有値と直交固有ベクトルを厳密計算
+        const eigRes = jacobiEigenvalues(cov);
         
         const ev = [];
         for (let i = 0; i < p; i++) {
             ev.push({
-                val: eig.lambda.x[i],
-                vec: eig.E.x.map(row => row[i])
+                val: eigRes.values[i],
+                vec: eigRes.vectors[i]
             });
         }
         ev.sort((a, b) => b.val - a.val);
@@ -1496,16 +1692,28 @@ function runPCA() {
         const eigenValues = ev.map(x => x.val);
         const eigenVectors = numeric.transpose(ev.map(x => x.vec));
         
-        const totalVar = eigenValues.reduce((a, b) => a + b, 0);
+        const totalVar = eigenValues.reduce((a, b) => a + b, 0) || 1;
         const explainedVar = eigenValues.map(v => v / totalVar);
         
         const scores = numeric.dot(Xc, eigenVectors);
         
+        // 因子負荷量 (Factor Loadings) の計算:
+        // 各変数の標準偏差 s_i を算出し、相関係数 [-1, 1] として正規化
+        const stdDevs = [];
+        for (let j = 0; j < p; j++) {
+            let sumSq = 0;
+            for (let i = 0; i < n; i++) sumSq += Xc[i][j] * Xc[i][j];
+            stdDevs.push(Math.sqrt(sumSq / (n > 1 ? n - 1 : 1)));
+        }
+        
         const factorLoadings = [];
         for (let i = 0; i < p; i++) {
             factorLoadings[i] = [];
+            const s_i = stdDevs[i];
             for (let j = 0; j < p; j++) {
-                factorLoadings[i][j] = eigenVectors[i][j] * Math.sqrt(Math.max(0, eigenValues[j]));
+                const rawL = eigenVectors[i][j] * Math.sqrt(Math.max(0, eigenValues[j]));
+                const corr = (s_i > 1e-12) ? rawL / s_i : 0;
+                factorLoadings[i][j] = Math.max(-1, Math.min(1, corr));
             }
         }
         
@@ -1646,7 +1854,18 @@ function updatePlot() {
 
     const traces = [];
     
-    const colors = ['#3b82f6', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899', '#06b6d4', '#84cc16'];
+    const colors = [
+        '#3b82f6', // blue
+        '#10b981', // emerald
+        '#f59e0b', // amber
+        '#8b5cf6', // purple
+        '#ec4899', // pink
+        '#06b6d4', // cyan
+        '#84cc16', // lime
+        '#ea580c', // orange
+        '#6366f1', // indigo
+        '#14b8a6'  // teal
+    ];
     const numClusters = enableClustering ? (Math.max(...pcaResult.clusters) + 1) : 1;
     
     for(let c = 0; c < numClusters; c++) {
@@ -1919,7 +2138,8 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
         const optK = pcaResult.optimalK || 1;
         clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
             <strong>🎯 クラスタ数判定の根拠:</strong><br>
-            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、最適分割数 <strong>K = ${optK}</strong> を自動決定。
+            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、最適分割数 <strong>K = ${optK}</strong> を自動決定。<br>
+            <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">※ クラスタリングは全変数の多次元空間で実行され、その結果を2次元平面に投影して領域描画しているため、平面上で楕円同士に重なりが生じる場合があります。</span>
         </p>`;
     }
 
@@ -1959,36 +2179,69 @@ function getTopContributors(loadings) {
 function downloadCsv() {
     if (!pcaResult) return;
     
-    let csvContent = "Label,Cluster,";
-    for (let i = 0; i < pcaResult.scores[0].length; i++) {
+    let csvContent = "";
+    const numPCs = pcaResult.eigenValues.length;
+    
+    // 1. 主成分サマリー（固有値、個別寄与率、累積寄与率）
+    csvContent += "主成分サマリー,";
+    for (let i = 0; i < numPCs; i++) {
+        csvContent += `PC${i+1},`;
+    }
+    csvContent += "\n";
+    
+    csvContent += "固有値 (Eigenvalue),";
+    for (let i = 0; i < numPCs; i++) {
+        csvContent += `${pcaResult.eigenValues[i].toFixed(4)},`;
+    }
+    csvContent += "\n";
+    
+    csvContent += "寄与率 (%),";
+    for (let i = 0; i < numPCs; i++) {
+        csvContent += `${(pcaResult.explainedVar[i] * 100).toFixed(2)}%,`;
+    }
+    csvContent += "\n";
+    
+    csvContent += "累積寄与率 (%),";
+    let cumVar = 0;
+    for (let i = 0; i < numPCs; i++) {
+        cumVar += pcaResult.explainedVar[i] * 100;
+        csvContent += `${cumVar.toFixed(2)}%,`;
+    }
+    csvContent += "\n\n";
+    
+    // 2. サンプル主成分得点 (Scores)
+    csvContent += "サンプル名,所属クラスタ,";
+    for (let i = 0; i < numPCs; i++) {
         csvContent += `PC${i+1},`;
     }
     csvContent += "\n";
     
     for (let i = 0; i < pcaResult.labels.length; i++) {
-        csvContent += `${pcaResult.labels[i]},${pcaResult.clusters[i] + 1},`;
+        csvContent += `"${pcaResult.labels[i]}",クラスタ ${pcaResult.clusters[i] + 1},`;
         for (let j = 0; j < pcaResult.scores[i].length; j++) {
-            csvContent += `${pcaResult.scores[i][j]},`;
+            csvContent += `${pcaResult.scores[i][j].toFixed(4)},`;
         }
         csvContent += "\n";
     }
     
-    csvContent += "\nVariables (Loadings),";
-    for (let i = 0; i < pcaResult.loadings[0].length; i++) {
+    // 3. 因子負荷量 (Factor Loadings)
+    csvContent += "\n分析変数 (因子負荷量 / 相関係数),";
+    for (let i = 0; i < numPCs; i++) {
         csvContent += `PC${i+1},`;
     }
     csvContent += "\n";
     
     const activeFeatures = getActiveFeatures();
     for (let i = 0; i < activeFeatures.length; i++) {
-        csvContent += `${activeFeatures[i]},`;
+        csvContent += `"${activeFeatures[i]}",`;
         for (let j = 0; j < pcaResult.loadings[i].length; j++) {
-            csvContent += `${pcaResult.loadings[i][j]},`;
+            csvContent += `${pcaResult.loadings[i][j].toFixed(4)},`;
         }
         csvContent += "\n";
     }
     
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    // UTF-8 BOM を付与して Excel での文字化けを防止
+    const blob = new Blob([new Uint8Array([0xEF, 0xBB, 0xBF]), csvContent], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement("a");
     link.setAttribute("href", url);
@@ -2050,9 +2303,17 @@ function getEllipsePoints(xArray, yArray, numPoints = 100, confidence = 2.0) {
     const lambda1 = (trace + Math.sqrt(inner)) / 2;
     const lambda2 = (trace - Math.sqrt(inner)) / 2;
 
-    let v1x = cxy, v1y = lambda1 - cxx;
+    let v1x, v1y;
     if (Math.abs(cxy) < 1e-8) {
-        v1x = 1; v1y = 0;
+        // cxy がほぼ0のとき: 分散が大きい方の軸を主軸とする
+        if (cxx >= cyy) {
+            v1x = 1; v1y = 0;
+        } else {
+            v1x = 0; v1y = 1;
+        }
+    } else {
+        v1x = cxy;
+        v1y = lambda1 - cxx;
     }
     const norm = Math.sqrt(v1x*v1x + v1y*v1y) || 1;
     v1x /= norm; v1y /= norm;
