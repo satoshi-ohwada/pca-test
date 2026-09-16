@@ -1577,8 +1577,10 @@ function determineOptimalK(data) {
 
 
 // 実対称行列専用のヤコビ法による高精度・完全実数固有値計算
-function jacobiEigenvalues(matrix, maxIter = 100) {
+function jacobiEigenvalues(matrix, maxIter = null) {
     const n = matrix.length;
+    // 非対角ペア数 n*(n-1)/2 に対し、十分な回転数（最大100スイープ相当、最低1000回）を確保
+    const effectiveMaxIter = maxIter !== null ? maxIter : Math.max(1000, n * n * 50);
     let A = matrix.map(r => [...r]);
     let V = Array.from({ length: n }, (_, i) => {
         const row = new Array(n).fill(0);
@@ -1586,7 +1588,7 @@ function jacobiEigenvalues(matrix, maxIter = 100) {
         return row;
     });
 
-    for (let iter = 0; iter < maxIter; iter++) {
+    for (let iter = 0; iter < effectiveMaxIter; iter++) {
         let maxVal = 0;
         let p = 0, q = 1;
         for (let i = 0; i < n; i++) {
