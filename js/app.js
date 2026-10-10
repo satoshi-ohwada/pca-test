@@ -8,6 +8,7 @@ let detectedOutlierIndices = new Set();
 let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
 let missingMode = 'drop'; // 'drop', 'mean', 'median'
 let clusterSpace = 'all'; // 'all', 'pc'
+let splomMaxVars = 'all'; // '8', '10', '12', '15', 'all'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
 let currentScale = 1.0;
@@ -403,6 +404,10 @@ if (btnReset) {
 
         const clusterSpaceSelect = document.getElementById('cluster-space-select');
         if (clusterSpaceSelect) clusterSpaceSelect.value = 'all';
+
+        splomMaxVars = 'all';
+        const splomMaxVarsSelect = document.getElementById('splom-max-vars');
+        if (splomMaxVarsSelect) splomMaxVarsSelect.value = 'all';
         
         const pearsonRadio = document.querySelector('input[name="corr-method"][value="pearson"]');
         if (pearsonRadio) pearsonRadio.checked = true;
@@ -621,6 +626,16 @@ if (btnViewHeatmap && btnViewSplom) {
             renderSPLOM();
             window.dispatchEvent(new Event('resize'));
         }, 10);
+    });
+}
+
+const splomMaxVarsSelect = document.getElementById('splom-max-vars');
+if (splomMaxVarsSelect) {
+    splomMaxVarsSelect.addEventListener('change', (e) => {
+        splomMaxVars = e.target.value;
+        if (currentRelView === 'splom') {
+            renderSPLOM();
+        }
     });
 }
 
@@ -1278,33 +1293,54 @@ function renderSPLOM() {
     const rawActiveData = getActiveNumericData();
     if (!rawActiveFeatures || rawActiveFeatures.length < 2 || !rawActiveData || rawActiveData.length === 0) return;
     
-    // 変数数が多すぎる場合はブラウザフリーズを防ぐため上位6変数に最適化
-    const isLimited = rawActiveFeatures.length > 6;
-    const activeFeatures = isLimited ? rawActiveFeatures.slice(0, 6) : rawActiveFeatures;
-    const activeData = isLimited ? rawActiveData.map(row => row.slice(0, 6)) : rawActiveData;
+    // 表示変数数セレクタに応じた変数の制限設定
+    let maxVars = rawActiveFeatures.length;
+    if (splomMaxVars !== 'all') {
+        const parsed = parseInt(splomMaxVars, 10);
+        if (!isNaN(parsed) && parsed > 0) {
+            maxVars = parsed;
+        }
+    }
     
-    const splomNotice = document.querySelector('#splom-view-wrapper p');
+    const isLimited = rawActiveFeatures.length > maxVars;
+    const activeFeatures = isLimited ? rawActiveFeatures.slice(0, maxVars) : rawActiveFeatures;
+    const activeData = isLimited ? rawActiveData.map(row => row.slice(0, maxVars)) : rawActiveData;
+    
+    const splomNotice = document.getElementById('splom-description') || document.querySelector('#splom-view-wrapper p');
     if (splomNotice) {
         if (isLimited) {
-            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数を表示します。<br><span style="color:#d97706; font-weight:600;">⚠️ 描画パフォーマンスを維持するため、全${rawActiveFeatures.length}変数中、最初の6変数のみを表示しています。</span>`;
+            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数を表示します。<br><span style="color:#d97706; font-weight:600;">⚠️ 全${rawActiveFeatures.length}変数中、選択された最初の${maxVars}変数のみを表示しています（右上のセレクタで表示数を変更可能）。</span>`;
         } else {
-            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数と検定スター（p値）を表示します。`;
+            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数と検定スター（p値）を表示します。<br><span style="color:#059669; font-weight:600;">✨ 全${rawActiveFeatures.length}変数を表示中（右上のセレクタで表示数を絞り込み可能）。</span>`;
         }
     }
     
     const activeP = activeFeatures.length;
     const traces = [];
     const shapes = [];
+    
+    // 変数数に応じた動的レイアウト・スタイリング
+    const perCellHeight = activeP <= 6 ? 140 : (activeP <= 10 ? 100 : 85);
+    const layoutHeight = Math.max(520, activeP * perCellHeight);
+    const marginL = activeP > 10 ? 55 : 65;
+    const marginT = activeP > 10 ? 65 : 75;
+    const gap = activeP <= 6 ? 0.02 : (activeP <= 10 ? 0.015 : 0.01);
+    const titleFontSize = activeP <= 6 ? 12 : (activeP <= 10 ? 10 : 9);
+    const corrFontSize = activeP <= 5 ? 16 : (activeP <= 8 ? 12 : (activeP <= 11 ? 10 : 8.5));
+    const markerSize = activeP <= 6 ? 5 : (activeP <= 10 ? 4 : 3);
+    const regLineWidth = activeP <= 6 ? 2 : 1.5;
+    const kdeSteps = activeP >= 8 ? 40 : 100;
+    const tickFontSize = activeP <= 8 ? 9 : 8;
+
     const layout = {
         showlegend: false,
         hovermode: 'closest',
         plot_bgcolor: '#f8fafc',
         paper_bgcolor: '#ffffff',
-        margin: {l: 65, r: 25, b: 65, t: 75},
-        height: Math.max(520, activeP * 150),
+        margin: {l: marginL, r: 25, b: marginL, t: marginT},
+        height: layoutHeight,
     };
     
-    const gap = 0.02;
     for (let r = 0; r < activeP; r++) {
         for (let c = 0; c < activeP; c++) {
             const idx = r * activeP + c + 1;
@@ -1363,7 +1399,7 @@ function renderSPLOM() {
                 side: 'bottom',
                 tickangle: 0,
                 nticks: 3,
-                tickfont: { size: 9, color: '#64748b' },
+                tickfont: { size: tickFontSize, color: '#64748b' },
                 range: [minX - padX, maxX + padX] 
             };
             layout[axNameY] = { 
@@ -1373,7 +1409,7 @@ function renderSPLOM() {
                 zeroline: false, 
                 showticklabels: c === 0, 
                 nticks: 3,
-                tickfont: { size: 9, color: '#64748b' },
+                tickfont: { size: tickFontSize, color: '#64748b' },
                 range: (r === c) ? undefined : [minY - padY, maxY + padY] 
             };
             
@@ -1384,17 +1420,17 @@ function renderSPLOM() {
             if (r === 0) {
                 layout[axNameX].side = 'top';
                 layout[axNameX].showticklabels = false;
-                layout[axNameX].title = { text: `<b>${activeFeatures[c]}</b>`, font: {size: 12, color: '#1e293b'}, standoff: 12 };
+                layout[axNameX].title = { text: `<b>${activeFeatures[c]}</b>`, font: {size: titleFontSize, color: '#1e293b'}, standoff: activeP > 10 ? 8 : 12 };
             }
             if (c === 0) {
-                layout[axNameY].title = { text: `<b>${activeFeatures[r]}</b>`, font: {size: 12, color: '#1e293b'}, standoff: 12 };
+                layout[axNameY].title = { text: `<b>${activeFeatures[r]}</b>`, font: {size: titleFontSize, color: '#1e293b'}, standoff: activeP > 10 ? 8 : 12 };
             }
             
             const axisX = 'x' + (idx === 1 ? '' : idx);
             const axisY = 'y' + (idx === 1 ? '' : idx);
             
             if (r === c) {
-                // Diagonal: Restored previous clean histogram + KDE line
+                // Diagonal: Histogram + KDE line
                 traces.push({
                     x: xData,
                     type: 'histogram',
@@ -1405,13 +1441,13 @@ function renderSPLOM() {
                     hoverinfo: 'skip'
                 });
                 
-                const kde = calculateKDE(xData);
+                const kde = calculateKDE(xData, kdeSteps);
                 traces.push({
                     x: kde.x,
                     y: kde.y,
                     mode: 'lines',
                     type: 'scatter',
-                    line: {color: '#1e3a8a', width: 2},
+                    line: {color: '#1e3a8a', width: regLineWidth},
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'skip'
@@ -1429,7 +1465,7 @@ function renderSPLOM() {
                     text: [`<b>${valText}</b>`],
                     mode: 'text',
                     type: 'scatter',
-                    textfont: { size: activeP > 5 ? 12 : 16, color: fontColor },
+                    textfont: { size: corrFontSize, color: fontColor },
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'text',
@@ -1442,7 +1478,7 @@ function renderSPLOM() {
                     y: yData,
                     mode: 'markers',
                     type: 'scatter',
-                    marker: { color: 'rgba(37, 99, 235, 0.65)', size: 5, line: {color: 'white', width: 0.5} },
+                    marker: { color: 'rgba(37, 99, 235, 0.65)', size: markerSize, line: {color: 'white', width: 0.5} },
                     xaxis: axisX,
                     yaxis: axisY,
                     text: getActiveLabels(),
@@ -1455,7 +1491,7 @@ function renderSPLOM() {
                     y: [reg.m * minX + reg.b, reg.m * maxX + reg.b],
                     mode: 'lines',
                     type: 'scatter',
-                    line: { color: '#dc2626', width: 2 },
+                    line: { color: '#dc2626', width: regLineWidth },
                     xaxis: axisX,
                     yaxis: axisY,
                     hoverinfo: 'skip'
