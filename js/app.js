@@ -6,11 +6,18 @@ let disabledFeatures = new Set();
 let disabledRowIndices = new Set();
 let detectedOutlierIndices = new Set();
 let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
+let missingMode = 'drop'; // 'drop', 'mean', 'median'
+let clusterSpace = 'all'; // 'all', 'pc'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
 let currentScale = 1.0;
 
 let currentRelView = 'heatmap';
+
+// 軸トラッキング（スマートスワップ用）
+let prevAxisX = "0";
+let prevAxisY = "1";
+let prevAxisZ = "2";
 
 function getActiveFeatures() {
     if (!features) return [];
@@ -38,7 +45,7 @@ function getActiveNumericData() {
 
 function getActiveRowIndices() {
     const indices = [];
-    if (labels && numericData && numericData.length > 0) {
+    if (labels && rawNumericData && rawNumericData.length > 0) {
         const activeColIndices = [];
         features.forEach((f, idx) => {
             if (!disabledFeatures.has(f)) activeColIndices.push(idx);
@@ -46,14 +53,20 @@ function getActiveRowIndices() {
         
         labels.forEach((_, i) => {
             if (!disabledRowIndices.has(i)) {
-                let hasMissing = false;
-                for (const cIdx of activeColIndices) {
-                    if (isNaN(numericData[i][cIdx]) || numericData[i][cIdx] === null) {
-                        hasMissing = true;
-                        break;
+                if (missingMode === 'drop') {
+                    let hasMissing = false;
+                    for (const cIdx of activeColIndices) {
+                        const val = rawNumericData[i][cIdx];
+                        if (isNaN(val) || val === null) {
+                            hasMissing = true;
+                            break;
+                        }
                     }
-                }
-                if (!hasMissing) {
+                    if (!hasMissing) {
+                        indices.push(i);
+                    }
+                } else {
+                    // mean または median モードでは補完されるため行は除外されない
                     indices.push(i);
                 }
             }
@@ -160,30 +173,90 @@ if (btnUseSample) {
     });
 }
 
-if (btnRunPca) btnRunPca.addEventListener('click', runPCA);
+if (btnRunPca) btnRunPca.addEventListener('click', () => runPCA(false));
+
+function getClusteringInputData(pcaRes = pcaResult) {
+    if (!pcaRes) return [];
+    if (clusterSpace === 'pc') {
+        const is3D = document.getElementById('enable-3d') ? document.getElementById('enable-3d').checked : false;
+        const xIdx = parseInt(axisXSelect ? axisXSelect.value : 0);
+        const yIdx = parseInt(axisYSelect ? axisYSelect.value : 1);
+        const zIdx = parseInt(axisZSelect ? axisZSelect.value : 2);
+        if (is3D) {
+            return pcaRes.scores.map(row => [row[xIdx], row[yIdx], row[zIdx]]);
+        } else {
+            return pcaRes.scores.map(row => [row[xIdx], row[yIdx]]);
+        }
+    }
+    return pcaRes.X;
+}
+
+function updateClustersForCurrentSettings() {
+    if (!pcaResult) return;
+    const k = parseInt(clusterCount ? clusterCount.value : 3);
+    const dataForClustering = getClusteringInputData(pcaResult);
+    pcaResult.clusters = kMeansBest(dataForClustering, k).clusters;
+}
+
 if (axisXSelect) {
     axisXSelect.addEventListener('change', () => {
-        if (axisYSelect && axisXSelect.value === axisYSelect.value) {
-            const options = Array.from(axisYSelect.options).map(o => o.value);
-            const other = options.find(val => val !== axisXSelect.value);
-            if (other !== undefined) axisYSelect.value = other;
+        const newX = axisXSelect.value;
+        if (axisYSelect && newX === axisYSelect.value) {
+            axisYSelect.value = prevAxisX;
+            prevAxisY = prevAxisX;
         }
+        if (axisZSelect && newX === axisZSelect.value) {
+            const options = Array.from(axisZSelect.options).map(o => o.value);
+            const other = options.find(val => val !== newX && val !== (axisYSelect ? axisYSelect.value : null));
+            if (other !== undefined) {
+                axisZSelect.value = other;
+                prevAxisZ = other;
+            }
+        }
+        prevAxisX = newX;
+        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
         updatePlot();
         renderLoadingsChart();
     });
 }
 if (axisYSelect) {
     axisYSelect.addEventListener('change', () => {
-        if (axisXSelect && axisYSelect.value === axisXSelect.value) {
-            const options = Array.from(axisXSelect.options).map(o => o.value);
-            const other = options.find(val => val !== axisYSelect.value);
-            if (other !== undefined) axisXSelect.value = other;
+        const newY = axisYSelect.value;
+        if (axisXSelect && newY === axisXSelect.value) {
+            axisXSelect.value = prevAxisY;
+            prevAxisX = prevAxisY;
         }
+        if (axisZSelect && newY === axisZSelect.value) {
+            const options = Array.from(axisZSelect.options).map(o => o.value);
+            const other = options.find(val => val !== newY && val !== (axisXSelect ? axisXSelect.value : null));
+            if (other !== undefined) {
+                axisZSelect.value = other;
+                prevAxisZ = other;
+            }
+        }
+        prevAxisY = newY;
+        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
         updatePlot();
         renderLoadingsChart();
     });
 }
-if (axisZSelect) axisZSelect.addEventListener('change', updatePlot);
+if (axisZSelect) {
+    axisZSelect.addEventListener('change', () => {
+        const newZ = axisZSelect.value;
+        const xVal = axisXSelect ? axisXSelect.value : null;
+        const yVal = axisYSelect ? axisYSelect.value : null;
+        if (newZ === xVal || newZ === yVal) {
+            const options = Array.from(axisZSelect.options).map(o => o.value);
+            const avail = options.find(val => val !== xVal && val !== yVal);
+            if (avail !== undefined) {
+                axisZSelect.value = avail;
+            }
+        }
+        prevAxisZ = axisZSelect.value;
+        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+        updatePlot();
+    });
+}
 
 if (enable3dCheck) {
     enable3dCheck.addEventListener('change', (e) => {
@@ -192,7 +265,10 @@ if (enable3dCheck) {
         } else {
             if (zAxisGroup) zAxisGroup.style.display = 'none';
         }
-        if (pcaResult) updatePlot();
+        if (pcaResult) {
+            if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+            updatePlot();
+        }
     });
 }
 
@@ -226,13 +302,25 @@ if (plotTitleInput) {
         if(pcaResult) updatePlot();
     });
 }
+
+const clusterSpaceSelect = document.getElementById('cluster-space-select');
+if (clusterSpaceSelect) {
+    clusterSpaceSelect.addEventListener('change', (e) => {
+        clusterSpace = e.target.value;
+        if (pcaResult) {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    });
+}
+
 if (clusterCount) {
     const handleClusterChange = (e) => {
         const k = parseInt(e.target.value);
         const clusterValSpan = document.getElementById('cluster-value');
         if (clusterValSpan) clusterValSpan.textContent = k;
         if (pcaResult) {
-            pcaResult.clusters = kMeansBest(pcaResult.X, k).clusters;
+            updateClustersForCurrentSettings();
             updatePlot();
         }
     };
@@ -293,15 +381,28 @@ setupSliderStepButtons('cluster-count', 'btn-cluster-count-dec', 'btn-cluster-co
 if (btnReset) {
     btnReset.addEventListener('click', () => {
         transformMode = 'std';
+        missingMode = 'drop';
+        clusterSpace = 'all';
         corrMethod = 'pearson';
         disabledFeatures = new Set();
         disabledRowIndices = new Set();
         detectedOutlierIndices = new Set();
+        prevAxisX = "0";
+        prevAxisY = "1";
+        prevAxisZ = "2";
         
         const transformSelect = document.getElementById('transform-mode-select');
         const transformSelect2 = document.getElementById('transform-mode-select-step2');
         if (transformSelect) transformSelect.value = 'std';
         if (transformSelect2) transformSelect2.value = 'std';
+        
+        const missingSelect = document.getElementById('missing-mode-select');
+        const missingSelect2 = document.getElementById('missing-mode-select-step2');
+        if (missingSelect) missingSelect.value = 'drop';
+        if (missingSelect2) missingSelect2.value = 'drop';
+
+        const clusterSpaceSelect = document.getElementById('cluster-space-select');
+        if (clusterSpaceSelect) clusterSpaceSelect.value = 'all';
         
         const pearsonRadio = document.querySelector('input[name="corr-method"][value="pearson"]');
         if (pearsonRadio) pearsonRadio.checked = true;
@@ -343,6 +444,12 @@ if (btnBackToData) {
     btnBackToData.addEventListener('click', () => {
         resultsSection.classList.add('hidden');
         uploadSection.classList.remove('hidden');
+        renderPreview();
+        renderStatistics();
+        renderDataDiagnosis();
+        setTimeout(() => {
+            window.dispatchEvent(new Event('resize'));
+        }, 50);
     });
 }
 
@@ -393,6 +500,36 @@ if (transformSelect2) {
     transformSelect2.addEventListener('change', (e) => handleTransformChange(e.target.value));
 }
 
+// Missing Mode Select Handlers
+const missingSelect = document.getElementById('missing-mode-select');
+const missingSelect2 = document.getElementById('missing-mode-select-step2');
+const missingHint = document.getElementById('missing-hint');
+
+const missingHints = {
+    drop: "💡 <b>欠測行を除外</b>: 1つでも欠測がある行を分析対象から除外します（統計的バイアスが最も少ない標準手法）。",
+    mean: "📊 <b>平均値で補完</b>: 各変数の平均値で空欄を埋め、サンプル数を減らさずに分析します。",
+    median: "🛡️ <b>中央値で補完</b>: 各変数の中央値で空欄を埋め、外れ値の影響を受けにくく補完します。"
+};
+
+function handleMissingChange(newMode) {
+    missingMode = newMode;
+    if (missingSelect) missingSelect.value = missingMode;
+    if (missingSelect2) missingSelect2.value = missingMode;
+    if (missingHint) missingHint.innerHTML = missingHints[missingMode] || '';
+    
+    if (rawNumericData && rawNumericData.length > 0) {
+        applyStandardization();
+        refreshAllVisualizations();
+    }
+}
+
+if (missingSelect) {
+    missingSelect.addEventListener('change', (e) => handleMissingChange(e.target.value));
+}
+if (missingSelect2) {
+    missingSelect2.addEventListener('change', (e) => handleMissingChange(e.target.value));
+}
+
 // Correlation Method Handler
 document.querySelectorAll('input[name="corr-method"]').forEach(radio => {
     radio.addEventListener('change', (e) => {
@@ -412,16 +549,20 @@ if (btnExcludeOutliers) {
             alert("現在、1.5×IQR基準を超える外れ値サンプルは検出されていません。");
             return;
         }
+        const count = detectedOutlierIndices.size;
         detectedOutlierIndices.forEach(idx => disabledRowIndices.add(idx));
         refreshAllVisualizations();
+        alert(`⚡ 特徴的なサンプル（外れ値）${count}件を分析対象から一括除外しました。\n（除外後の有効データに基づいて前処理パラメータとPCAが再計算されました）`);
     });
 }
 
 const btnResetSampleExclusion = document.getElementById('btn-reset-sample-exclusion');
 if (btnResetSampleExclusion) {
     btnResetSampleExclusion.addEventListener('click', () => {
+        const prevCount = disabledRowIndices.size;
         disabledRowIndices.clear();
         refreshAllVisualizations();
+        alert(`🔄 全サンプル（${labels.length}件）を分析対象に戻しました。`);
     });
 }
 
@@ -603,17 +744,47 @@ function applyStandardization() {
     
     numericData = JSON.parse(JSON.stringify(rawNumericData)); 
     
-    // 'none' モード: 生データをそのまま保持（中心化は runPCA 内部の Xc でのみ実行）
+    // 1. 欠測値の補完処理 (mean または median モード時)
+    if (missingMode === 'mean' || missingMode === 'median') {
+        for (let j = 0; j < p; j++) {
+            const validVals = [];
+            for (let i = 0; i < n; i++) {
+                if (!disabledRowIndices.has(i) && !isNaN(rawNumericData[i][j]) && rawNumericData[i][j] !== null) {
+                    validVals.push(rawNumericData[i][j]);
+                }
+            }
+            if (validVals.length > 0) {
+                let fillVal = 0;
+                if (missingMode === 'mean') {
+                    fillVal = validVals.reduce((a, b) => a + b, 0) / validVals.length;
+                } else {
+                    validVals.sort((a, b) => a - b);
+                    const mid = Math.floor(validVals.length / 2);
+                    fillVal = validVals.length % 2 !== 0 ? validVals[mid] : (validVals[mid - 1] + validVals[mid]) / 2;
+                }
+                for (let i = 0; i < n; i++) {
+                    if (isNaN(numericData[i][j]) || numericData[i][j] === null) {
+                        numericData[i][j] = fillVal;
+                    }
+                }
+            }
+        }
+    }
+    
+    // 'none' モード: 補完後の生データをそのまま保持（中心化は runPCA 内部の Xc でのみ実行）
     if (transformMode === 'none') {
         return;
     }
+    
+    // PCAおよび分析に投入されるアクティブ行集合を取得（母集団の完全一致を保証）
+    const activeRows = new Set(getActiveRowIndices());
     
     if (transformMode === 'log') {
         // 対数変換のシフト幅（アクティブサンプルの最小値に基づく）
         for (let j = 0; j < p; j++) {
             let minVal = Infinity;
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j]) && numericData[i][j] < minVal) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j]) && numericData[i][j] < minVal) {
                     minVal = numericData[i][j];
                 }
             }
@@ -629,7 +800,7 @@ function applyStandardization() {
         for (let j = 0; j < p; j++) {
             let sum = 0, count = 0;
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j])) {
                     sum += numericData[i][j];
                     count++;
                 }
@@ -637,7 +808,7 @@ function applyStandardization() {
             const mean = count > 0 ? sum / count : 0;
             let sumSq = 0;
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j])) {
                     sumSq += Math.pow(numericData[i][j] - mean, 2);
                 }
             }
@@ -653,7 +824,7 @@ function applyStandardization() {
         for (let j = 0; j < p; j++) {
             const col = [];
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j])) {
                     col.push(numericData[i][j]);
                 }
             }
@@ -676,7 +847,7 @@ function applyStandardization() {
         for (let j = 0; j < p; j++) {
             let sum = 0, count = 0;
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j])) {
                     sum += numericData[i][j];
                     count++;
                 }
@@ -685,7 +856,7 @@ function applyStandardization() {
             
             let sumSq = 0;
             for (let i = 0; i < n; i++) {
-                if (!disabledRowIndices.has(i) && !isNaN(numericData[i][j])) {
+                if (activeRows.has(i) && !isNaN(numericData[i][j])) {
                     sumSq += Math.pow(numericData[i][j] - mean, 2);
                 }
             }
@@ -824,11 +995,14 @@ function renderStatistics() {
 
 function refreshAllVisualizations() {
     applyStandardization();
-    renderPreview();
-    renderStatistics();
-    renderDataDiagnosis();
-    if (!resultsSection.classList.contains('hidden')) {
-        runPCA();
+    const isResultsVisible = resultsSection && !resultsSection.classList.contains('hidden');
+    if (!isResultsVisible) {
+        renderPreview();
+        renderStatistics();
+        renderDataDiagnosis();
+    } else {
+        // 画面2（ダッシュボード）表示中は、現在の選択状態（軸・クラスタ数）を維持したままPCAを再計算
+        runPCA(true);
     }
 }
 
@@ -1100,9 +1274,23 @@ function renderSampleCheckboxPanel() {
 }
 
 function renderSPLOM() {
-    const activeFeatures = getActiveFeatures();
-    const activeData = getActiveNumericData();
-    if (!activeFeatures || activeFeatures.length < 2 || !activeData || activeData.length === 0) return;
+    const rawActiveFeatures = getActiveFeatures();
+    const rawActiveData = getActiveNumericData();
+    if (!rawActiveFeatures || rawActiveFeatures.length < 2 || !rawActiveData || rawActiveData.length === 0) return;
+    
+    // 変数数が多すぎる場合はブラウザフリーズを防ぐため上位6変数に最適化
+    const isLimited = rawActiveFeatures.length > 6;
+    const activeFeatures = isLimited ? rawActiveFeatures.slice(0, 6) : rawActiveFeatures;
+    const activeData = isLimited ? rawActiveData.map(row => row.slice(0, 6)) : rawActiveData;
+    
+    const splomNotice = document.querySelector('#splom-view-wrapper p');
+    if (splomNotice) {
+        if (isLimited) {
+            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数を表示します。<br><span style="color:#d97706; font-weight:600;">⚠️ 描画パフォーマンスを維持するため、全${rawActiveFeatures.length}変数中、最初の6変数のみを表示しています。</span>`;
+        } else {
+            splomNotice.innerHTML = `対角線にヒストグラム/密度分布、下三角に散布図と回帰直線、上三角に相関係数と検定スター（p値）を表示します。`;
+        }
+    }
     
     const activeP = activeFeatures.length;
     const traces = [];
@@ -1640,7 +1828,7 @@ function jacobiEigenvalues(matrix, maxIter = null) {
     return { values, vectors };
 }
 
-function runPCA() {
+function runPCA(preserveState = false) {
     try {
         const activeFeatures = getActiveFeatures();
         const activeLabels = getActiveLabels();
@@ -1654,6 +1842,12 @@ function runPCA() {
             alert("主成分分析を実行するには、少なくとも3つ以上のサンプル（データ行）を選択してください。");
             return;
         }
+        
+        // 状態退避（preserveState時）
+        const savedX = (preserveState && axisXSelect) ? axisXSelect.value : null;
+        const savedY = (preserveState && axisYSelect) ? axisYSelect.value : null;
+        const savedZ = (preserveState && axisZSelect) ? axisZSelect.value : null;
+        const savedK = (preserveState && clusterCount) ? parseInt(clusterCount.value) : null;
         
         const n = X.length;
         const p = X[0].length;
@@ -1719,28 +1913,69 @@ function runPCA() {
             }
         }
         
+        // 主成分ベクトルの符号揃え (Sign Alignment):
+        // 各主成分 j について、最大絶対値を持つ変数の符号または負荷量合計が負の場合、
+        // 固有ベクトル、因子負荷量、主成分得点の符号を一括反転し、主軸の向きを直感的に統一
+        for (let j = 0; j < p; j++) {
+            let sumLoading = 0;
+            let maxAbsLoading = -1;
+            let signOfMax = 1;
+            for (let i = 0; i < p; i++) {
+                const l = factorLoadings[i][j];
+                sumLoading += l;
+                if (Math.abs(l) > maxAbsLoading) {
+                    maxAbsLoading = Math.abs(l);
+                    signOfMax = l >= 0 ? 1 : -1;
+                }
+            }
+            const shouldFlip = (Math.abs(sumLoading) > 0.05) ? (sumLoading < 0) : (signOfMax < 0);
+            if (shouldFlip) {
+                for (let i = 0; i < p; i++) {
+                    eigenVectors[i][j] *= -1;
+                    factorLoadings[i][j] *= -1;
+                }
+                for (let i = 0; i < n; i++) {
+                    scores[i][j] *= -1;
+                }
+            }
+        }
+        
         const optKInfo = determineOptimalK(X);
         const optimalK = optKInfo.optimalK;
-        clusterCount.value = optimalK;
-        const clusterValSpan = document.getElementById('cluster-value');
-        if (clusterValSpan) clusterValSpan.textContent = optimalK;
-
-        const initialClusters = kMeansBest(X, optimalK).clusters;
+        const effectiveK = (preserveState && savedK) ? Math.min(savedK, Math.min(10, n - 1)) : optimalK;
         
+        if (clusterCount) clusterCount.value = effectiveK;
+        const clusterValSpan = document.getElementById('cluster-value');
+        if (clusterValSpan) clusterValSpan.textContent = effectiveK;
+
         pcaResult = {
             X: X,
             labels: activeLabels,
             features: activeFeatures,
             scores: scores,
             loadings: factorLoadings,
+            eigenVectors: eigenVectors,
             explainedVar: explainedVar,
             eigenValues: eigenValues,
-            clusters: initialClusters,
+            clusters: [],
             optimalK: optimalK,
             wcss: optKInfo.wcss
         };
         
         setupSelects(p);
+        
+        if (preserveState) {
+            if (savedX !== null && parseInt(savedX) < p) axisXSelect.value = savedX;
+            if (savedY !== null && parseInt(savedY) < p) axisYSelect.value = savedY;
+            if (savedZ !== null && axisZSelect && parseInt(savedZ) < p) axisZSelect.value = savedZ;
+        }
+        prevAxisX = axisXSelect.value;
+        prevAxisY = axisYSelect.value;
+        if (axisZSelect) prevAxisZ = axisZSelect.value;
+
+        // クラスタリングの計算（clusterSpace に応じて）
+        const dataForClustering = getClusteringInputData(pcaResult);
+        pcaResult.clusters = kMeansBest(dataForClustering, effectiveK).clusters;
         
         // Show results section first so container dimensions are valid
         uploadSection.classList.add('hidden');
@@ -2118,6 +2353,15 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
     } else {
         transformText = "<span style='color: var(--text-muted); font-weight: 600;'>※ 標準化なし（生データ）を使用</span>";
     }
+
+    let missingText = "";
+    if (missingMode === 'drop') {
+        missingText = " <span style='color: var(--text-muted); font-size: 0.9em;'>(欠測行: 除外)</span>";
+    } else if (missingMode === 'mean') {
+        missingText = " <span style='color: #0369a1; font-size: 0.9em;'>(欠測: 平均値補完)</span>";
+    } else if (missingMode === 'median') {
+        missingText = " <span style='color: #0369a1; font-size: 0.9em;'>(欠測: 中央値補完)</span>";
+    }
         
     let pcaInsightText = "";
     let clusterInsightText = "";
@@ -2132,16 +2376,20 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
         const kaiserCount = ev.filter(v => v >= avgEigen).length || 1;
         const kaiserCum = cumRatios[kaiserCount - 1].toFixed(1);
         pcaInsightText = `<p style="margin-top: 0.75rem; background: #eff6ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #3b82f6; font-size: 0.9em;">
-            <strong>【次元数の判定 (平均固有値基準)】</strong><br>
+            <strong>【次元数の判定 (平均固有値基準 / カイザー基準)】</strong><br>
             第1〜第${kaiserCount}主成分までで、全体の分散の <strong>${kaiserCum}%</strong> を説明できています（情報量の維持率）。<br>
             ※目安として、固有値が平均(${avgEigen.toFixed(2)})以上となる主成分を採用することが推奨されます。
         </p>`;
         
         const optK = pcaResult.optimalK || 1;
+        const spaceDesc = clusterSpace === 'pc' 
+            ? "🎯 <strong>表示中主成分空間 (2D/3D平面)</strong> に基づきクラスタリングを実行中（平面上で領域が重なりにくく綺麗に分割されます）。"
+            : "🌐 <strong>全変数の多次元空間</strong> に基づきクラスタリングを実行中（多次元の総合的類似度を忠実に反映。2D平面への射影のため楕円に重なりが生じる場合があります）。";
+            
         clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
-            <strong>🎯 クラスタ数判定の根拠:</strong><br>
-            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、最適分割数 <strong>K = ${optK}</strong> を自動決定。<br>
-            <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">※ クラスタリングは全変数の多次元空間で実行され、その結果を2次元平面に投影して領域描画しているため、平面上で楕円同士に重なりが生じる場合があります。</span>
+            <strong>🎯 クラスタリング分析:</strong><br>
+            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、推奨クラスタ数 <strong>K = ${optK}</strong>。<br>
+            <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">${spaceDesc}</span>
         </p>`;
     }
 
@@ -2150,7 +2398,7 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
     if (is3D) combinedVar += parseFloat(varZ);
 
     summaryText.innerHTML = `
-        <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${transformText}</p>
+        <p style="margin-bottom: 0.75rem; font-size: 0.9em;">${transformText}${missingText}</p>
         <p><strong>第${xIdx+1}主成分 (横軸)</strong> は、全体のデータの <strong>${varX}%</strong> の情報を説明しています。<br>
         この軸は主に <strong>「${topX}」</strong> の影響を強く受けています。</p>
         <p style="margin-top: 0.5rem;"><strong>第${yIdx+1}主成分 (縦軸)</strong> は、全体の <strong>${varY}%</strong> の情報を説明しています。<br>
@@ -2159,7 +2407,7 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
         <p style="margin-top: 0.5rem;">選択した軸を合わせることで、全体の <strong>${combinedVar.toFixed(1)}%</strong> の情報を一枚の図で表現できています。</p>
         ${pcaInsightText}
         ${clusterInsightText}
-        <p style="margin-top: 1rem;"><small style="color: var(--text-muted);">※赤い矢印（ベクトル）が長いほど、その変数がその方向に強く影響していることを示します。</small></p>
+        <p style="margin-top: 1rem;"><small style="color: var(--text-muted);">※ グラフ軸の数値は各サンプルの「主成分得点」です。赤い矢印（ベクトル）の先端にマウスを重ねると、その変数の正確な相関係数（因子負荷量: -1.00〜+1.00）が表示されます。</small></p>
     `;
 }
 
@@ -2240,6 +2488,22 @@ function downloadCsv() {
             csvContent += `${pcaResult.loadings[i][j].toFixed(4)},`;
         }
         csvContent += "\n";
+    }
+    
+    // 4. 主成分得点係数 / 固有ベクトル (Eigenvectors)
+    if (pcaResult.eigenVectors) {
+        csvContent += "\n分析変数 (主成分得点係数 / 固有ベクトル),";
+        for (let i = 0; i < numPCs; i++) {
+            csvContent += `PC${i+1},`;
+        }
+        csvContent += "\n";
+        for (let i = 0; i < activeFeatures.length; i++) {
+            csvContent += `"${activeFeatures[i]}",`;
+            for (let j = 0; j < numPCs; j++) {
+                csvContent += `${pcaResult.eigenVectors[i][j].toFixed(4)},`;
+            }
+            csvContent += "\n";
+        }
     }
     
     // UTF-8 BOM を付与して Excel での文字化けを防止
@@ -2410,6 +2674,17 @@ function renderDataDiagnosis() {
         </div>`;
     }
     
+    const nSamples = activeData.length;
+    let dimensionWarningHTML = "";
+    if (nSamples <= p) {
+        dimensionWarningHTML = `
+            <div style="margin-top: 0.75rem; background: #fffbeb; border: 1px solid #fde68a; padding: 0.6rem 0.85rem; border-radius: 6px; font-size: 0.88em; color: #92400e; line-height: 1.45;">
+                ⚠️ <strong>高次元・小標本データに関する注意 (サンプル数 ${nSamples} ≦ 変数数 ${p}):</strong><br>
+                データ行数（サンプル数）が変数数以下であるため、数学的に非ゼロの有効固有値は最大 ${Math.max(1, nSamples - 1)} 個に縮退します。主成分の一般化には追加サンプルの収集を推奨します。
+            </div>
+        `;
+    }
+    
     diagCard.style.borderLeftColor = badgeColor;
     diagCard.innerHTML = `
         <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 0.5rem; flex-wrap: wrap; gap: 0.5rem;">
@@ -2420,6 +2695,7 @@ function renderDataDiagnosis() {
         </div>
         <div style="font-weight: 600; color: ${badgeColor}; margin-bottom: 0.25rem;">${title}</div>
         <div style="font-size: 0.9em; color: var(--text-color); line-height: 1.5;">${desc}</div>
+        ${dimensionWarningHTML}
         ${topPairsHTML}
     `;
 }

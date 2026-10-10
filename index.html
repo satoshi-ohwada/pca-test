@@ -137,6 +137,19 @@
                     <p id="transform-hint" style="font-size: 0.82rem; color: var(--text-muted); margin-top: 0.5rem; line-height: 1.4;">
                         💡 <b>標準化 (Z-Score)</b>: 平均を0、標準偏差を1に揃え、変数ごとの単位差（例：金額と人数）による影響をなくします。
                     </p>
+                    <div style="margin-top: 0.75rem; padding-top: 0.75rem; border-top: 1px dashed var(--border);">
+                        <label for="missing-mode-select" style="font-weight: 600; font-size: 0.88rem; display: flex; align-items: center; gap: 0.35rem; margin-bottom: 0.35rem;">
+                            🧩 欠測値（空欄・無効値）の処理方法
+                        </label>
+                        <select id="missing-mode-select" class="form-select" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; background-color: white;">
+                            <option value="drop" selected>❌ 欠測行を除外 (リストワイズ削除) [標準・推奨]</option>
+                            <option value="mean">📊 各変数の平均値で補完 - サンプル数を維持</option>
+                            <option value="median">🛡️ 各変数の中央値で補完 - 外れ値に強い補完</option>
+                        </select>
+                        <p id="missing-hint" style="font-size: 0.78rem; color: var(--text-muted); margin-top: 0.35rem; line-height: 1.35;">
+                            💡 <b>欠測行を除外</b>: 1つでも欠測がある行を分析対象から除外します（統計的バイアスが最も少ない標準手法）。
+                        </p>
+                    </div>
                 </div>
 
                 <div style="overflow-x: auto; max-height: 400px; margin-bottom: 2rem; border-bottom: 1px solid var(--border);">
@@ -274,7 +287,7 @@
                             <label for="vector-scale">因子負荷量のスケーリング</label>
                             <span id="vector-scale-val" style="font-size: 0.85em; color: var(--text-muted); font-weight: 600;">x1.0</span>
                         </div>
-                        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; line-height: 1.4;">ベクトルの長さ（見た目の強調度）を調整します。</p>
+                        <p style="font-size: 0.8rem; color: var(--text-muted); margin-bottom: 0.25rem; line-height: 1.4;">ベクトルの長さ（見た目の強調度）を調整します。<br><span style="font-size: 0.75rem; color: #dc2626;">※矢印先端にマウスを重ねると正確な相関係数 (-1.0〜+1.0) を表示</span></p>
                         <div class="slider-btn-group">
                             <button type="button" class="btn-slider-step" id="btn-vector-scale-dec" title="減らす (-0.1)" aria-label="減らす">-</button>
                             <input type="range" id="vector-scale" min="0.1" max="5" step="0.1" value="1">
@@ -292,15 +305,28 @@
                             <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
                             <button type="button" class="btn-slider-step" id="btn-cluster-count-inc" title="増やす (+1)" aria-label="増やす">+</button>
                         </div>
+                        <div style="margin-top: 0.5rem;">
+                            <label for="cluster-space-select" style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.2rem; display: block;">クラスタリングの対象空間:</label>
+                            <select id="cluster-space-select" class="form-select" style="width: 100%; padding: 0.35rem; border-radius: 4px; border: 1px solid var(--border); font-size: 0.82rem;">
+                                <option value="all" selected>🌐 全変数 (多次元空間) [標準・総合類似度]</option>
+                                <option value="pc">🎯 表示中の主成分 (2D/3D平面) [平面領域分離]</option>
+                            </select>
+                        </div>
                     </div>
                     
                     <div class="control-group" style="margin-top: 1rem;">
                         <label for="transform-mode-select-step2" style="font-size: 0.85rem; font-weight: 600; margin-bottom: 0.25rem;">🛠️ データ補正・変換モード</label>
-                        <select id="transform-mode-select-step2" class="form-select" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; margin-bottom: 0.75rem;">
+                        <select id="transform-mode-select-step2" class="form-select" style="width: 100%; padding: 0.4rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; margin-bottom: 0.5rem;">
                             <option value="std">✨ 標準化 (Z-Score) [標準]</option>
                             <option value="log">📈 対数変換 + 標準化</option>
                             <option value="robust">🛡️ ロバスト標準化 (Median/IQR)</option>
                             <option value="none">直値 (変換なし)</option>
+                        </select>
+                        <label for="missing-mode-select-step2" style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.2rem; display: block;">🧩 欠測値の処理方法</label>
+                        <select id="missing-mode-select-step2" class="form-select" style="width: 100%; padding: 0.35rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.82rem; margin-bottom: 0.75rem;">
+                            <option value="drop" selected>❌ 欠測行を除外 (リストワイズ)</option>
+                            <option value="mean">📊 平均値で補完</option>
+                            <option value="median">🛡️ 中央値で補完</option>
                         </select>
                         <label style="display: flex; align-items: center; cursor: pointer; font-weight: normal; margin-bottom: 0.5rem;">
                             <input type="checkbox" id="show-vectors" checked style="margin-right: 0.5rem; width: auto;">
