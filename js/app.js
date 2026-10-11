@@ -744,6 +744,11 @@ if (btnReset) {
         if (uploadSection) uploadSection.classList.remove('hidden');
         if (resultsSection) resultsSection.classList.add('hidden');
         if (dataPreview) dataPreview.classList.add('hidden');
+        const noticeBanner = document.getElementById('data-notice-banner');
+        if (noticeBanner) {
+            noticeBanner.classList.add('hidden');
+            noticeBanner.innerHTML = '';
+        }
         if (fileInput) fileInput.value = "";
     });
 }
@@ -1093,14 +1098,48 @@ function processRawData(data) {
         const headerRow = data[0];
         const validColIndices = [];
         const featureNames = [];
+        const nonNumericCols = [];
         
+        // ヘッダー行以降のデータ行から、各列の数値比率を検証（文字列・カテゴリ列を自動判別）
         for (let j = 1; j < headerRow.length; j++) {
             const colName = String(headerRow[j] || '').trim();
-            if (colName !== '') {
+            if (colName === '') continue;
+            
+            let nonEmptyCount = 0;
+            let numericCount = 0;
+            for (let i = 1; i < data.length; i++) {
+                const row = data[i];
+                if (!row || row.length <= j) continue;
+                const cell = row[j];
+                if (cell !== undefined && cell !== null && String(cell).trim() !== '') {
+                    nonEmptyCount++;
+                    const cleanStr = String(cell).trim().replace(/,/g, '');
+                    const num = parseFloat(cleanStr);
+                    if (!isNaN(num) && isFinite(num)) {
+                        numericCount++;
+                    }
+                }
+            }
+            // 空列ではなく、かつ非空値のうち過半数(50%以上)が数値であれば分析対象の数値変数と判定
+            if (nonEmptyCount > 0 && (numericCount / nonEmptyCount >= 0.5)) {
                 validColIndices.push(j);
                 featureNames.push(colName);
+            } else {
+                nonNumericCols.push(colName);
             }
         }
+        
+        // 数値変数が不足している場合の早期エラーガード
+        if (featureNames.length < 2) {
+            let msg = "⚠️ 主成分分析（PCA）を行うには、少なくとも2列以上の数値データが必要です。\n";
+            if (nonNumericCols.length > 0) {
+                msg += `\n【検出された非数値列（文字列・カテゴリ等）】\n・${nonNumericCols.join('\n・')}\n`;
+            }
+            msg += "\n数値データが含まれる表形式ファイル（CSV, TSV, TXT, Excel等）を指定してください。";
+            alert(msg);
+            return;
+        }
+        
         features = featureNames;
         
         const rawLabels = [];
@@ -1108,15 +1147,21 @@ function processRawData(data) {
         
         for (let i = 1; i < data.length; i++) {
             const row = data[i];
-            if (!row || row.length === 0 || !row[0]) continue;
+            if (!row || row.length === 0) continue;
+            // 行内のすべてのセルが空の場合はスキップ
+            const isRowAllEmpty = row.every(cell => cell === undefined || cell === null || String(cell).trim() === '');
+            if (isRowAllEmpty) continue;
             
             const numericRow = [];
             for (const j of validColIndices) {
-                const val = parseFloat(row[j]);
-                numericRow.push(val); // Will push NaN if missing or invalid
+                const cell = (row[j] !== undefined && row[j] !== null) ? row[j] : '';
+                const cleanStr = String(cell).trim().replace(/,/g, '');
+                const val = cleanStr === '' ? NaN : parseFloat(cleanStr);
+                numericRow.push(val); // 欠測や無効値は NaN として保持
             }
             
-            rawLabels.push(String(row[0]).trim() || `Row ${i}`);
+            const labelStr = (row[0] !== undefined && row[0] !== null && String(row[0]).trim() !== '') ? String(row[0]).trim() : `Row ${i}`;
+            rawLabels.push(labelStr);
             parsedNumeric.push(numericRow);
         }
         
@@ -1126,6 +1171,26 @@ function processRawData(data) {
         disabledRowIndices = new Set();
         detectedOutlierIndices = new Set();
         pcaResult = null;
+        
+        // 文字列・カテゴリ列が除外された場合の案内バナー
+        const noticeBanner = document.getElementById('data-notice-banner');
+        if (noticeBanner) {
+            if (nonNumericCols.length > 0) {
+                noticeBanner.classList.remove('hidden');
+                noticeBanner.innerHTML = `
+                    <div style="display: flex; align-items: flex-start; gap: 0.65rem; background: #eff6ff; border: 1px solid #bfdbfe; color: #1e40af; padding: 0.75rem 1rem; border-radius: 8px; font-size: 0.88rem; line-height: 1.5;">
+                        <span style="font-size: 1.15rem; line-height: 1;">ℹ️</span>
+                        <div>
+                            <strong>文字列・カテゴリ列を自動検出しました:</strong><br>
+                            「${nonNumericCols.map(c => `<code>${c}</code>`).join('」「')}」は数値ではないため、主成分分析（PCA）の数値変数から自動除外されました（${featureNames.length}個の数値変数を読み込みました）。
+                        </div>
+                    </div>
+                `;
+            } else {
+                noticeBanner.classList.add('hidden');
+                noticeBanner.innerHTML = '';
+            }
+        }
         
         applyStandardization();
         
@@ -1622,7 +1687,8 @@ function renderSampleCheckboxPanel() {
     });
 
     labels.forEach((lbl, idx) => {
-        if (searchVal && !lbl.toLowerCase().includes(searchVal)) return;
+        const rowNumStr = `#${idx + 1}`;
+        if (searchVal && !lbl.toLowerCase().includes(searchVal) && !rowNumStr.includes(searchVal)) return;
         
         let hasMissing = false;
         for (const cIdx of activeColIndices) {
@@ -1650,7 +1716,7 @@ function renderSampleCheckboxPanel() {
         
         labelEl.innerHTML = `
             <input type="checkbox" class="sample-checkbox" data-index="${idx}" ${isChecked ? 'checked' : ''} ${hasMissing ? 'disabled' : ''} style="width: auto; margin-right: 0.2rem;">
-            <span>${lbl}</span> 
+            <span><span style="color:var(--text-muted); font-size:0.75rem;">${rowNumStr}</span> ${lbl}</span> 
             ${isOutlier ? '<span title="特徴的な値（特異値）を持つサンプル">💡</span>' : ''}
             ${hasMissing ? '<span title="欠測値あり" style="font-size:0.75rem; background:#cbd5e1; color:white; padding:0 4px; border-radius:3px;">欠測</span>' : ''}
         `;
