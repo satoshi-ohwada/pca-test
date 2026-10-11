@@ -8,6 +8,9 @@ let detectedOutlierIndices = new Set();
 let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
 let missingMode = 'drop'; // 'drop', 'mean', 'median'
 let clusterSpace = 'all'; // 'all', 'pc'
+let clusterMethod = 'kmeans'; // 'kmeans', 'dbscan'
+let dbscanEps = 1.0;
+let dbscanMinPts = 3;
 let splomMaxVars = 'all'; // '8', '10', '12', '15', 'all'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
@@ -180,11 +183,166 @@ function getClusteringInputData(pcaRes = pcaResult) {
     return pcaRes.X;
 }
 
+function euclideanDistance(a, b) {
+    let sum = 0;
+    for (let i = 0; i < a.length; i++) {
+        const d = a[i] - b[i];
+        sum += d * d;
+    }
+    return Math.sqrt(sum);
+}
+
+function runDBSCAN(data, eps, minPts) {
+    const n = data.length;
+    if (n === 0) return { labels: [], numClusters: 0, numNoise: 0 };
+    
+    const labels = new Array(n);
+    const visited = new Array(n).fill(false);
+    let clusterId = 0;
+    
+    const neighbors = [];
+    for (let i = 0; i < n; i++) {
+        const nb = [];
+        for (let j = 0; j < n; j++) {
+            if (euclideanDistance(data[i], data[j]) <= eps) {
+                nb.push(j);
+            }
+        }
+        neighbors.push(nb);
+    }
+    
+    for (let i = 0; i < n; i++) {
+        if (visited[i]) continue;
+        visited[i] = true;
+        
+        if (neighbors[i].length < minPts) {
+            labels[i] = -1; // ノイズ（外れ値）
+            continue;
+        }
+        
+        // 新規クラスタ開始
+        labels[i] = clusterId;
+        const seedSet = [...neighbors[i]];
+        const seedIdx = seedSet.indexOf(i);
+        if (seedIdx > -1) seedSet.splice(seedIdx, 1);
+        
+        let idx = 0;
+        while (idx < seedSet.length) {
+            const curr = seedSet[idx];
+            idx++;
+            
+            if (labels[curr] === -1) {
+                labels[curr] = clusterId; // ノイズから境界点に昇格
+            }
+            if (visited[curr]) continue;
+            
+            visited[curr] = true;
+            labels[curr] = clusterId;
+            
+            if (neighbors[curr].length >= minPts) {
+                for (let q = 0; q < neighbors[curr].length; q++) {
+                    const pt = neighbors[curr][q];
+                    if (!seedSet.includes(pt) && pt !== curr) {
+                        seedSet.push(pt);
+                    }
+                }
+            }
+        }
+        clusterId++;
+    }
+    
+    for (let i = 0; i < n; i++) {
+        if (labels[i] === undefined) labels[i] = -1;
+    }
+    
+    const numClusters = clusterId;
+    const numNoise = labels.filter(l => l === -1).length;
+    return { labels, numClusters, numNoise };
+}
+
+function estimateDBSCAN_Eps(data, minPts = 3) {
+    const n = data.length;
+    if (n <= minPts) return 1.0;
+    
+    const k = Math.max(1, minPts - 1);
+    const kDistances = [];
+    for (let i = 0; i < n; i++) {
+        const dists = [];
+        for (let j = 0; j < n; j++) {
+            if (i !== j) {
+                dists.push(euclideanDistance(data[i], data[j]));
+            }
+        }
+        dists.sort((a, b) => a - b);
+        kDistances.push(dists[Math.min(k, dists.length - 1)]);
+    }
+    
+    kDistances.sort((a, b) => a - b);
+    const targetIdx = Math.floor(kDistances.length * 0.65);
+    const estimated = kDistances[targetIdx];
+    return Math.max(0.05, parseFloat(estimated.toFixed(2)));
+}
+
+function updateDBSCANSummaryUI() {
+    const summaryEl = document.getElementById('dbscan-result-summary');
+    if (!summaryEl || !pcaResult || !pcaResult.dbscanStats) return;
+    const { numClusters, numNoise } = pcaResult.dbscanStats;
+    summaryEl.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>検出クラスタ: <strong style="color: #2563eb;">${numClusters}個</strong></span>
+            <span>外れ値 (ノイズ): <strong style="color: ${numNoise > 0 ? '#dc2626' : '#16a34a'};">${numNoise}件</strong></span>
+        </div>
+    `;
+}
+
+function autoConfigureDBSCAN(applyImmediately = true) {
+    if (!pcaResult) return;
+    const data = getClusteringInputData(pcaResult);
+    const minPtsInput = document.getElementById('dbscan-min-pts');
+    const minPts = minPtsInput ? parseInt(minPtsInput.value) : 3;
+    
+    const optEps = estimateDBSCAN_Eps(data, minPts);
+    dbscanEps = optEps;
+    
+    const epsInput = document.getElementById('dbscan-eps');
+    const epsValSpan = document.getElementById('dbscan-eps-val');
+    if (epsInput) {
+        const minEps = Math.max(0.02, parseFloat((optEps * 0.1).toFixed(2)));
+        const maxEps = Math.max(optEps * 3.0, 5.0);
+        epsInput.min = minEps;
+        epsInput.max = parseFloat(maxEps.toFixed(2));
+        epsInput.step = parseFloat((optEps * 0.05).toFixed(2)) || 0.05;
+        epsInput.value = optEps;
+    }
+    if (epsValSpan) epsValSpan.textContent = optEps.toFixed(2);
+    
+    if (applyImmediately && clusterMethod === 'dbscan') {
+        updateClustersForCurrentSettings();
+        updatePlot();
+    }
+}
+
 function updateClustersForCurrentSettings() {
     if (!pcaResult) return;
-    const k = parseInt(clusterCount ? clusterCount.value : 3);
     const dataForClustering = getClusteringInputData(pcaResult);
-    pcaResult.clusters = kMeansBest(dataForClustering, k).clusters;
+    
+    if (clusterMethod === 'dbscan') {
+        const epsInput = document.getElementById('dbscan-eps');
+        const minPtsInput = document.getElementById('dbscan-min-pts');
+        const eps = epsInput ? parseFloat(epsInput.value) : dbscanEps;
+        const minPts = minPtsInput ? parseInt(minPtsInput.value) : dbscanMinPts;
+        
+        const dbRes = runDBSCAN(dataForClustering, eps, minPts);
+        pcaResult.clusters = dbRes.labels;
+        pcaResult.dbscanStats = {
+            numClusters: dbRes.numClusters,
+            numNoise: dbRes.numNoise
+        };
+        updateDBSCANSummaryUI();
+    } else {
+        const k = parseInt(clusterCount ? clusterCount.value : 3);
+        pcaResult.clusters = kMeansBest(dataForClustering, k).clusters;
+    }
 }
 
 if (axisXSelect) {
@@ -450,13 +608,78 @@ function setupSliderStepButtons(sliderId, decBtnId, incBtnId) {
 
 setupSliderStepButtons('vector-scale', 'btn-vector-scale-dec', 'btn-vector-scale-inc');
 setupSliderStepButtons('cluster-count', 'btn-cluster-count-dec', 'btn-cluster-count-inc');
+setupSliderStepButtons('dbscan-eps', 'btn-dbscan-eps-dec', 'btn-dbscan-eps-inc');
+setupSliderStepButtons('dbscan-min-pts', 'btn-dbscan-min-pts-dec', 'btn-dbscan-min-pts-inc');
+
+// DBSCAN コントロールリスナー
+const clusterMethodSelect = document.getElementById('cluster-method-select');
+const kmeansControlsPanel = document.getElementById('kmeans-controls-panel');
+const dbscanControlsPanel = document.getElementById('dbscan-controls-panel');
+
+if (clusterMethodSelect) {
+    clusterMethodSelect.addEventListener('change', (e) => {
+        clusterMethod = e.target.value;
+        if (clusterMethod === 'dbscan') {
+            if (kmeansControlsPanel) kmeansControlsPanel.classList.add('hidden');
+            if (dbscanControlsPanel) dbscanControlsPanel.classList.remove('hidden');
+            if (pcaResult) autoConfigureDBSCAN(true);
+        } else {
+            if (kmeansControlsPanel) kmeansControlsPanel.classList.remove('hidden');
+            if (dbscanControlsPanel) dbscanControlsPanel.classList.add('hidden');
+            if (pcaResult) {
+                updateClustersForCurrentSettings();
+                updatePlot();
+            }
+        }
+    });
+}
+
+const dbscanEpsInput = document.getElementById('dbscan-eps');
+if (dbscanEpsInput) {
+    const handleEpsChange = (e) => {
+        dbscanEps = parseFloat(e.target.value);
+        const valSpan = document.getElementById('dbscan-eps-val');
+        if (valSpan) valSpan.textContent = dbscanEps.toFixed(2);
+        if (pcaResult && clusterMethod === 'dbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    };
+    dbscanEpsInput.addEventListener('input', handleEpsChange);
+    dbscanEpsInput.addEventListener('change', handleEpsChange);
+}
+
+const dbscanMinPtsInput = document.getElementById('dbscan-min-pts');
+if (dbscanMinPtsInput) {
+    const handleMinPtsChange = (e) => {
+        dbscanMinPts = parseInt(e.target.value);
+        const valSpan = document.getElementById('dbscan-min-pts-val');
+        if (valSpan) valSpan.textContent = dbscanMinPts;
+        if (pcaResult && clusterMethod === 'dbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    };
+    dbscanMinPtsInput.addEventListener('input', handleMinPtsChange);
+    dbscanMinPtsInput.addEventListener('change', handleMinPtsChange);
+}
+
+const btnAutoDbscanEps = document.getElementById('btn-auto-dbscan-eps');
+if (btnAutoDbscanEps) {
+    btnAutoDbscanEps.addEventListener('click', () => {
+        autoConfigureDBSCAN(true);
+    });
+}
 
 if (btnReset) {
     btnReset.addEventListener('click', () => {
         transformMode = 'std';
         missingMode = 'drop';
         clusterSpace = 'all';
+        clusterMethod = 'kmeans';
         corrMethod = 'pearson';
+        dbscanEps = 1.0;
+        dbscanMinPts = 3;
         disabledFeatures = new Set();
         disabledRowIndices = new Set();
         detectedOutlierIndices = new Set();
@@ -464,6 +687,10 @@ if (btnReset) {
         prevAxisY = "1";
         prevAxisZ = "2";
         
+        if (clusterMethodSelect) clusterMethodSelect.value = 'kmeans';
+        if (kmeansControlsPanel) kmeansControlsPanel.classList.remove('hidden');
+        if (dbscanControlsPanel) dbscanControlsPanel.classList.add('hidden');
+
         const transformSelect = document.getElementById('transform-mode-select');
         const transformSelect2 = document.getElementById('transform-mode-select-step2');
         if (transformSelect) transformSelect.value = 'std';
@@ -2206,8 +2433,23 @@ function runPCA(preserveState = false) {
             incBtn.disabled = effectiveK >= parseFloat(clusterCount.max || 10);
         }
 
-        // クラスタリングの計算（clusterSpace に応じて）
-        pcaResult.clusters = kMeansBest(dataForClustering, effectiveK).clusters;
+        // クラスタリングの計算（clusterSpace および clusterMethod に応じて）
+        if (clusterMethod === 'dbscan') {
+            autoConfigureDBSCAN(false);
+            const epsInput = document.getElementById('dbscan-eps');
+            const minPtsInput = document.getElementById('dbscan-min-pts');
+            const eps = epsInput ? parseFloat(epsInput.value) : dbscanEps;
+            const minPts = minPtsInput ? parseInt(minPtsInput.value) : dbscanMinPts;
+            const dbRes = runDBSCAN(dataForClustering, eps, minPts);
+            pcaResult.clusters = dbRes.labels;
+            pcaResult.dbscanStats = {
+                numClusters: dbRes.numClusters,
+                numNoise: dbRes.numNoise
+            };
+            updateDBSCANSummaryUI();
+        } else {
+            pcaResult.clusters = kMeansBest(dataForClustering, effectiveK).clusters;
+        }
         
         // Show results section first so container dimensions are valid
         uploadSection.classList.add('hidden');
@@ -2335,58 +2577,117 @@ function updatePlot() {
         '#6366f1', // indigo
         '#14b8a6'  // teal
     ];
-    const numClusters = enableClustering ? (Math.max(...pcaResult.clusters) + 1) : 1;
-    
-    for(let c = 0; c < numClusters; c++) {
-        const cX = [], cY = [], cZ = [], cText = [], cPos = [];
-        for(let i=0; i<pcaResult.clusters.length; i++) {
-            const ptCluster = enableClustering ? pcaResult.clusters[i] : 0;
-            if(ptCluster === c) {
-                cX.push(scoresX[i]);
-                cY.push(scoresY[i]);
-                if (is3D) cZ.push(scoresZ[i]);
-                cText.push(plotLabels[i]);
-                if(showLabels && !is3D) cPos.push(globalPositions[i]);
-            }
-        }
-        if(cX.length > 0) {
-            if (!is3D && enableClustering) {
-                const ellipse = getEllipsePoints(cX, cY, 100, 2.0);
-                if (ellipse) {
-                    traces.push({
-                        x: ellipse.x,
-                        y: ellipse.y,
-                        mode: 'lines',
-                        type: 'scatter',
-                        name: `クラスタ ${c+1} 領域`,
-                        line: { color: colors[c % colors.length], width: 1.5 },
-                        fill: 'toself',
-                        fillcolor: colors[c % colors.length],
-                        opacity: 0.12,
-                        showlegend: false,
-                        hoverinfo: 'skip'
-                    });
+    if (!enableClustering) {
+        const trace = {
+            x: scoresX,
+            y: scoresY,
+            mode: showLabels ? 'markers+text' : 'markers',
+            type: is3D ? 'scatter3d' : 'scatter',
+            name: 'データ点',
+            text: plotLabels,
+            marker: { 
+                size: is3D ? 6 : 10, 
+                color: colors[0], 
+                opacity: 0.95,
+                line: { color: '#ffffff', width: is3D ? 0 : 1.5 }
+            },
+            textfont: { size: 11, color: '#1e293b' }
+        };
+        if (is3D) trace.z = scoresZ;
+        if (!is3D && showLabels) trace.textposition = globalPositions;
+        traces.push(trace);
+    } else {
+        const uniqueClusters = Array.from(new Set(pcaResult.clusters));
+        const normalClusters = uniqueClusters.filter(c => c >= 0).sort((a, b) => a - b);
+        const hasNoise = uniqueClusters.includes(-1);
+
+        // 1. 通常クラスタの描画
+        for (let idx = 0; idx < normalClusters.length; idx++) {
+            const c = normalClusters[idx];
+            const cX = [], cY = [], cZ = [], cText = [], cPos = [];
+            for (let i = 0; i < pcaResult.clusters.length; i++) {
+                if (pcaResult.clusters[i] === c) {
+                    cX.push(scoresX[i]);
+                    cY.push(scoresY[i]);
+                    if (is3D) cZ.push(scoresZ[i]);
+                    cText.push(plotLabels[i]);
+                    if (showLabels && !is3D) cPos.push(globalPositions[i]);
                 }
             }
+            if (cX.length > 0) {
+                if (!is3D) {
+                    const ellipse = getEllipsePoints(cX, cY, 100, 2.0);
+                    if (ellipse) {
+                        traces.push({
+                            x: ellipse.x,
+                            y: ellipse.y,
+                            mode: 'lines',
+                            type: 'scatter',
+                            name: `クラスタ ${c + 1} 領域`,
+                            line: { color: colors[c % colors.length], width: 1.5 },
+                            fill: 'toself',
+                            fillcolor: colors[c % colors.length],
+                            opacity: 0.12,
+                            showlegend: false,
+                            hoverinfo: 'skip'
+                        });
+                    }
+                }
 
-            const trace = {
-                x: cX,
-                y: cY,
-                mode: showLabels ? (is3D ? 'markers+text' : 'markers+text') : 'markers',
-                type: is3D ? 'scatter3d' : 'scatter',
-                name: enableClustering ? `クラスタ ${c+1}` : 'データ点',
-                text: cText,
-                marker: { 
-                    size: is3D ? 6 : 10, 
-                    color: colors[c % colors.length], 
-                    opacity: 0.95,
-                    line: { color: '#ffffff', width: is3D ? 0 : 1.5 }
-                },
-                textfont: { size: 11, color: '#1e293b' }
-            };
-            if (is3D) trace.z = cZ;
-            if (!is3D && showLabels) trace.textposition = cPos;
-            traces.push(trace);
+                const trace = {
+                    x: cX,
+                    y: cY,
+                    mode: showLabels ? 'markers+text' : 'markers',
+                    type: is3D ? 'scatter3d' : 'scatter',
+                    name: `クラスタ ${c + 1}`,
+                    text: cText,
+                    marker: { 
+                        size: is3D ? 6 : 10, 
+                        color: colors[c % colors.length], 
+                        opacity: 0.95,
+                        line: { color: '#ffffff', width: is3D ? 0 : 1.5 }
+                    },
+                    textfont: { size: 11, color: '#1e293b' }
+                };
+                if (is3D) trace.z = cZ;
+                if (!is3D && showLabels) trace.textposition = cPos;
+                traces.push(trace);
+            }
+        }
+
+        // 2. ノイズ点（外れ値）の描画 (DBSCAN時)
+        if (hasNoise) {
+            const nX = [], nY = [], nZ = [], nText = [], nPos = [];
+            for (let i = 0; i < pcaResult.clusters.length; i++) {
+                if (pcaResult.clusters[i] === -1) {
+                    nX.push(scoresX[i]);
+                    nY.push(scoresY[i]);
+                    if (is3D) nZ.push(scoresZ[i]);
+                    nText.push(plotLabels[i]);
+                    if (showLabels && !is3D) nPos.push(globalPositions[i]);
+                }
+            }
+            if (nX.length > 0) {
+                const noiseTrace = {
+                    x: nX,
+                    y: nY,
+                    mode: showLabels ? 'markers+text' : 'markers',
+                    type: is3D ? 'scatter3d' : 'scatter',
+                    name: '⚠️ 外れ値 (ノイズ)',
+                    text: nText,
+                    marker: { 
+                        size: is3D ? 7 : 11, 
+                        color: '#64748b', 
+                        symbol: is3D ? 'circle' : 'x',
+                        opacity: 0.85,
+                        line: { color: '#475569', width: 2 }
+                    },
+                    textfont: { size: 11, color: '#64748b' }
+                };
+                if (is3D) noiseTrace.z = nZ;
+                if (!is3D && showLabels) noiseTrace.textposition = nPos;
+                traces.push(noiseTrace);
+            }
         }
     }
     
@@ -2613,16 +2914,26 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
             ※目安として、固有値が平均(${avgEigen.toFixed(2)})以上となる主成分を採用することが推奨されます。
         </p>`;
         
-        const optK = pcaResult.optimalK || 1;
         const spaceDesc = clusterSpace === 'pc' 
             ? "🎯 <strong>表示中主成分空間 (2D/3D平面)</strong> に基づきクラスタリングを実行中（平面上で領域が重なりにくく綺麗に分割されます）。"
             : "🌐 <strong>全変数の多次元空間</strong> に基づきクラスタリングを実行中（多次元の総合的類似度を忠実に反映。2D平面への射影のため楕円に重なりが生じる場合があります）。";
-            
-        clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
-            <strong>🎯 クラスタリング分析:</strong><br>
-            エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、推奨クラスタ数 <strong>K = ${optK}</strong>。<br>
-            <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">${spaceDesc}</span>
-        </p>`;
+
+        if (clusterMethod === 'dbscan') {
+            const stats = pcaResult.dbscanStats || { numClusters: 0, numNoise: 0 };
+            clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
+                <strong>🌐 DBSCAN (密度クラスタリング分析):</strong><br>
+                探索半径 eps = <strong>${dbscanEps.toFixed(2)}</strong>、最小点数 MinPts = <strong>${dbscanMinPts}</strong> により、
+                <strong>${stats.numClusters} 個のクラスタ</strong> と <strong>${stats.numNoise} 件の外れ値（ノイズ）</strong> を検出しました。<br>
+                <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">${spaceDesc}</span>
+            </p>`;
+        } else {
+            const optK = pcaResult.optimalK || 1;
+            clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
+                <strong>🎯 K-Means クラスタリング分析:</strong><br>
+                エルボー法（クラスタ内分散和 WCSS の変化率が最大となる屈曲点）に基づき、推奨クラスタ数 <strong>K = ${optK}</strong>。<br>
+                <span style="font-size:0.85em; color:#6b21a8; display:block; margin-top:0.25rem;">${spaceDesc}</span>
+            </p>`;
+        }
     }
 
     const is3D = document.getElementById('enable-3d') ? document.getElementById('enable-3d').checked : false;
@@ -2699,7 +3010,9 @@ function downloadCsv() {
     csvContent += "\n";
     
     for (let i = 0; i < pcaResult.labels.length; i++) {
-        csvContent += `"${pcaResult.labels[i]}",クラスタ ${pcaResult.clusters[i] + 1},`;
+        const clVal = pcaResult.clusters[i];
+        const clName = (clVal === -1) ? "外れ値 (ノイズ)" : `クラスタ ${clVal + 1}`;
+        csvContent += `"${pcaResult.labels[i]}",${clName},`;
         for (let j = 0; j < pcaResult.scores[i].length; j++) {
             csvContent += `${pcaResult.scores[i][j].toFixed(4)},`;
         }

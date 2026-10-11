@@ -310,28 +310,71 @@
                     </div>
 
                     <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
-                            <label for="cluster-count" style="margin: 0;">クラスタ数 (K-Means):</label>
-                            <div style="display: flex; align-items: center; gap: 0.4rem;">
-                                <span id="cluster-value" style="font-size: 0.95em; font-weight: 700; color: var(--primary);">3</span>
-                                <button type="button" id="btn-apply-optimal-k" title="計算上の最適クラスタ数（エルボー法）を即座に適用します" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px; border: 1px solid #8b5cf6; background: #f5f3ff; color: #7c3aed; cursor: pointer; font-weight: 600; transition: all 0.2s;">
-                                    ✨ 最適値 (K=3)
-                                </button>
+                        <label for="cluster-method-select" style="font-weight: 600; font-size: 0.88rem; margin-bottom: 0.35rem; display: block;">🎯 クラスタリング手法:</label>
+                        <select id="cluster-method-select" class="form-select" style="width: 100%; padding: 0.45rem; border-radius: 6px; border: 1px solid var(--border); font-size: 0.85rem; margin-bottom: 0.6rem; font-weight: 600;">
+                            <option value="kmeans" selected>📊 K-Means (K平均法) [標準・重心分割]</option>
+                            <option value="dbscan">🌐 DBSCAN (密度基準・外れ値自動分離)</option>
+                        </select>
+
+                        <!-- K-Means コントロールパネル -->
+                        <div id="kmeans-controls-panel">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                                <label for="cluster-count" style="margin: 0; font-size: 0.85rem;">クラスタ数 (K):</label>
+                                <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                    <span id="cluster-value" style="font-size: 0.95em; font-weight: 700; color: var(--primary);">3</span>
+                                    <button type="button" id="btn-apply-optimal-k" title="計算上の最適クラスタ数（エルボー法）を即座に適用します" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px; border: 1px solid #8b5cf6; background: #f5f3ff; color: #7c3aed; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+                                        ✨ 最適値 (K=3)
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="slider-btn-group">
+                                <button type="button" class="btn-slider-step" id="btn-cluster-count-dec" title="減らす (-1)" aria-label="減らす">-</button>
+                                <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
+                                <button type="button" class="btn-slider-step" id="btn-cluster-count-inc" title="増やす (+1)" aria-label="増やす">+</button>
+                            </div>
+                            <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.45rem;">
+                                <label style="display: flex; align-items: center; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; margin: 0; user-select: none;">
+                                    <input type="checkbox" id="auto-optimal-k" checked style="width: auto; margin-right: 0.35rem;">
+                                    最適クラスタ数を初期値とする
+                                </label>
+                                <span id="optimal-k-badge" style="font-size: 0.75rem; color: #6d28d9; font-weight: 600; background: #ede9fe; padding: 0.12rem 0.4rem; border-radius: 4px;">推奨: K=3</span>
                             </div>
                         </div>
-                        <div class="slider-btn-group">
-                            <button type="button" class="btn-slider-step" id="btn-cluster-count-dec" title="減らす (-1)" aria-label="減らす">-</button>
-                            <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
-                            <button type="button" class="btn-slider-step" id="btn-cluster-count-inc" title="増やす (+1)" aria-label="増やす">+</button>
+
+                        <!-- DBSCAN コントロールパネル -->
+                        <div id="dbscan-controls-panel" class="hidden" style="background: #f8fafc; border: 1px solid var(--border); border-radius: 6px; padding: 0.65rem; margin-top: 0.3rem;">
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                                <label for="dbscan-eps" style="margin: 0; font-size: 0.85rem; font-weight: 600;">探索半径 (eps):</label>
+                                <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                    <span id="dbscan-eps-val" style="font-size: 0.9em; font-weight: 700; color: #7c3aed;">1.00</span>
+                                    <button type="button" id="btn-auto-dbscan-eps" title="データの最近傍距離から推奨半径を自動計算して適用します" style="padding: 0.15rem 0.45rem; font-size: 0.72rem; border-radius: 4px; border: 1px solid #8b5cf6; background: #ede9fe; color: #6d28d9; cursor: pointer; font-weight: 600;">
+                                        ✨ 推奨半径
+                                    </button>
+                                </div>
+                            </div>
+                            <div class="slider-btn-group">
+                                <button type="button" class="btn-slider-step" id="btn-dbscan-eps-dec" title="減らす" aria-label="減らす">-</button>
+                                <input type="range" id="dbscan-eps" min="0.1" max="10.0" step="0.05" value="1.0">
+                                <button type="button" class="btn-slider-step" id="btn-dbscan-eps-inc" title="増やす" aria-label="増やす">+</button>
+                            </div>
+
+                            <div style="display: flex; justify-content: space-between; align-items: center; margin-top: 0.5rem; margin-bottom: 0.25rem;">
+                                <label for="dbscan-min-pts" style="margin: 0; font-size: 0.85rem; font-weight: 600;">最小点数 (MinPts):</label>
+                                <span id="dbscan-min-pts-val" style="font-size: 0.9em; font-weight: 700; color: #7c3aed;">3</span>
+                            </div>
+                            <div class="slider-btn-group">
+                                <button type="button" class="btn-slider-step" id="btn-dbscan-min-pts-dec" title="減らす (-1)" aria-label="減らす">-</button>
+                                <input type="range" id="dbscan-min-pts" min="2" max="10" step="1" value="3">
+                                <button type="button" class="btn-slider-step" id="btn-dbscan-min-pts-inc" title="増やす (+1)" aria-label="増やす">+</button>
+                            </div>
+
+                            <div id="dbscan-result-summary" style="margin-top: 0.5rem; font-size: 0.78rem; padding: 0.4rem 0.5rem; background: white; border-radius: 4px; border: 1px solid #e2e8f0; color: #475569;">
+                                検出クラスタ: <strong>-</strong> / 外れ値: <strong>-</strong>
+                            </div>
                         </div>
-                        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.45rem;">
-                            <label style="display: flex; align-items: center; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; margin: 0; user-select: none;">
-                                <input type="checkbox" id="auto-optimal-k" checked style="width: auto; margin-right: 0.35rem;">
-                                最適クラスタ数を初期値とする
-                            </label>
-                            <span id="optimal-k-badge" style="font-size: 0.75rem; color: #6d28d9; font-weight: 600; background: #ede9fe; padding: 0.12rem 0.4rem; border-radius: 4px;">推奨: K=3</span>
-                        </div>
-                        <div style="margin-top: 0.5rem;">
+
+                        <!-- クラスタリング対象空間 -->
+                        <div style="margin-top: 0.6rem;">
                             <label for="cluster-space-select" style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.2rem; display: block;">クラスタリングの対象空間:</label>
                             <select id="cluster-space-select" class="form-select" style="width: 100%; padding: 0.35rem; border-radius: 4px; border: 1px solid var(--border); font-size: 0.82rem;">
                                 <option value="all" selected>🌐 全変数 (多次元空間) [標準・総合類似度]</option>
