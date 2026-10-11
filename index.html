@@ -310,14 +310,26 @@
                     </div>
 
                     <div class="control-group">
-                        <div style="display: flex; justify-content: space-between; align-items: center;">
-                            <label for="cluster-count">クラスタ数 (K-Means):</label>
-                            <span id="cluster-value" style="font-size: 0.9em; font-weight: 700; color: var(--primary);">3</span>
+                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.25rem;">
+                            <label for="cluster-count" style="margin: 0;">クラスタ数 (K-Means):</label>
+                            <div style="display: flex; align-items: center; gap: 0.4rem;">
+                                <span id="cluster-value" style="font-size: 0.95em; font-weight: 700; color: var(--primary);">3</span>
+                                <button type="button" id="btn-apply-optimal-k" title="計算上の最適クラスタ数（エルボー法）を即座に適用します" style="padding: 0.15rem 0.5rem; font-size: 0.75rem; border-radius: 4px; border: 1px solid #8b5cf6; background: #f5f3ff; color: #7c3aed; cursor: pointer; font-weight: 600; transition: all 0.2s;">
+                                    ✨ 最適値 (K=3)
+                                </button>
+                            </div>
                         </div>
                         <div class="slider-btn-group">
                             <button type="button" class="btn-slider-step" id="btn-cluster-count-dec" title="減らす (-1)" aria-label="減らす">-</button>
                             <input type="range" id="cluster-count" min="1" max="10" value="3" step="1">
                             <button type="button" class="btn-slider-step" id="btn-cluster-count-inc" title="増やす (+1)" aria-label="増やす">+</button>
+                        </div>
+                        <div style="display: flex; align-items: center; justify-content: space-between; margin-top: 0.45rem;">
+                            <label style="display: flex; align-items: center; font-size: 0.78rem; color: var(--text-muted); cursor: pointer; margin: 0; user-select: none;">
+                                <input type="checkbox" id="auto-optimal-k" checked style="width: auto; margin-right: 0.35rem;">
+                                最適クラスタ数を初期値とする
+                            </label>
+                            <span id="optimal-k-badge" style="font-size: 0.75rem; color: #6d28d9; font-weight: 600; background: #ede9fe; padding: 0.12rem 0.4rem; border-radius: 4px;">推奨: K=3</span>
                         </div>
                         <div style="margin-top: 0.5rem;">
                             <label for="cluster-space-select" style="font-size: 0.82rem; font-weight: 600; margin-bottom: 0.2rem; display: block;">クラスタリングの対象空間:</label>

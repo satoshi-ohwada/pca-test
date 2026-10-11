@@ -215,7 +215,10 @@ if (axisXSelect) {
             }
         }
         prevAxisX = newX;
-        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+        if (clusterSpace === 'pc') {
+            recalculateOptimalKForCurrentSpace();
+            updateClustersForCurrentSettings();
+        }
         updatePlot();
         renderLoadingsChart();
     });
@@ -236,7 +239,10 @@ if (axisYSelect) {
             }
         }
         prevAxisY = newY;
-        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+        if (clusterSpace === 'pc') {
+            recalculateOptimalKForCurrentSpace();
+            updateClustersForCurrentSettings();
+        }
         updatePlot();
         renderLoadingsChart();
     });
@@ -254,7 +260,10 @@ if (axisZSelect) {
             }
         }
         prevAxisZ = axisZSelect.value;
-        if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+        if (clusterSpace === 'pc') {
+            recalculateOptimalKForCurrentSpace();
+            updateClustersForCurrentSettings();
+        }
         updatePlot();
     });
 }
@@ -267,7 +276,10 @@ if (enable3dCheck) {
             if (zAxisGroup) zAxisGroup.style.display = 'none';
         }
         if (pcaResult) {
-            if (clusterSpace === 'pc') updateClustersForCurrentSettings();
+            if (clusterSpace === 'pc') {
+                recalculateOptimalKForCurrentSpace();
+                updateClustersForCurrentSettings();
+            }
             updatePlot();
         }
     });
@@ -304,13 +316,78 @@ if (plotTitleInput) {
     });
 }
 
+function updateOptimalKUI(optK) {
+    const btnApplyOpt = document.getElementById('btn-apply-optimal-k');
+    const badgeOpt = document.getElementById('optimal-k-badge');
+    if (btnApplyOpt) btnApplyOpt.innerHTML = `✨ 最適値 (K=${optK})`;
+    if (badgeOpt) badgeOpt.textContent = `推奨: K=${optK}`;
+}
+
+function applyOptimalKToSlider(optK) {
+    if (!optK || !clusterCount) return;
+    clusterCount.value = optK;
+    const clusterValSpan = document.getElementById('cluster-value');
+    if (clusterValSpan) clusterValSpan.textContent = optK;
+    
+    // スライダー増減ボタンの状態を更新
+    const decBtn = document.getElementById('btn-cluster-count-dec');
+    const incBtn = document.getElementById('btn-cluster-count-inc');
+    if (decBtn && incBtn) {
+        decBtn.disabled = optK <= parseFloat(clusterCount.min || 1);
+        incBtn.disabled = optK >= parseFloat(clusterCount.max || 10);
+    }
+    
+    if (pcaResult) {
+        updateClustersForCurrentSettings();
+        updatePlot();
+        renderElbowPlot();
+    }
+}
+
+function recalculateOptimalKForCurrentSpace() {
+    if (!pcaResult) return;
+    const dataForClustering = getClusteringInputData(pcaResult);
+    const optKInfo = determineOptimalK(dataForClustering);
+    pcaResult.optimalK = optKInfo.optimalK;
+    pcaResult.wcss = optKInfo.wcss;
+    updateOptimalKUI(pcaResult.optimalK);
+    
+    const autoOptCb = document.getElementById('auto-optimal-k');
+    if (autoOptCb && autoOptCb.checked) {
+        applyOptimalKToSlider(pcaResult.optimalK);
+    } else {
+        renderElbowPlot();
+    }
+}
+
 const clusterSpaceSelect = document.getElementById('cluster-space-select');
 if (clusterSpaceSelect) {
     clusterSpaceSelect.addEventListener('change', (e) => {
         clusterSpace = e.target.value;
         if (pcaResult) {
+            recalculateOptimalKForCurrentSpace();
             updateClustersForCurrentSettings();
             updatePlot();
+        }
+    });
+}
+
+const btnApplyOptimalK = document.getElementById('btn-apply-optimal-k');
+if (btnApplyOptimalK) {
+    btnApplyOptimalK.addEventListener('click', () => {
+        const autoOptCb = document.getElementById('auto-optimal-k');
+        if (autoOptCb) autoOptCb.checked = true;
+        if (pcaResult && pcaResult.optimalK) {
+            applyOptimalKToSlider(pcaResult.optimalK);
+        }
+    });
+}
+
+const autoOptimalKCb = document.getElementById('auto-optimal-k');
+if (autoOptimalKCb) {
+    autoOptimalKCb.addEventListener('change', (e) => {
+        if (e.target.checked && pcaResult && pcaResult.optimalK) {
+            applyOptimalKToSlider(pcaResult.optimalK);
         }
     });
 }
@@ -320,6 +397,13 @@ if (clusterCount) {
         const k = parseInt(e.target.value);
         const clusterValSpan = document.getElementById('cluster-value');
         if (clusterValSpan) clusterValSpan.textContent = k;
+        
+        // ユーザーが手動で最適値と異なるクラスタ数を選択した場合は自動設定チェックを解除
+        const autoOptCb = document.getElementById('auto-optimal-k');
+        if (autoOptCb && pcaResult && k !== pcaResult.optimalK) {
+            autoOptCb.checked = false;
+        }
+        
         if (pcaResult) {
             updateClustersForCurrentSettings();
             updatePlot();
@@ -404,6 +488,10 @@ if (btnReset) {
 
         const clusterSpaceSelect = document.getElementById('cluster-space-select');
         if (clusterSpaceSelect) clusterSpaceSelect.value = 'all';
+
+        const autoOptCb = document.getElementById('auto-optimal-k');
+        if (autoOptCb) autoOptCb.checked = true;
+        updateOptimalKUI(3);
 
         splomMaxVars = 'all';
         const splomMaxVarsSelect = document.getElementById('splom-max-vars');
@@ -1771,15 +1859,15 @@ function calculateWCSS(data, clusters, k) {
 }
 
 function determineOptimalK(data) {
-    if(data.length < 4) return { optimalK: 1, wcss: [0] };
+    if (!data || data.length < 4) return { optimalK: 1, wcss: [0] };
     let wcss = [];
     let maxK = Math.min(10, data.length - 1);
-    for(let k = 1; k <= maxK; k++) {
+    for (let k = 1; k <= maxK; k++) {
         let best_w = Infinity;
-        for(let r = 0; r < 10; r++) {
+        for (let r = 0; r < 10; r++) {
             let res = kMeans(data, k);
             let w = calculateWCSS(data, res.clusters, k);
-            if(w < best_w) best_w = w;
+            if (w < best_w) best_w = w;
         }
         // WCSSの単調減少性を保証
         if (wcss.length > 0 && best_w > wcss[wcss.length - 1]) {
@@ -1787,14 +1875,32 @@ function determineOptimalK(data) {
         }
         wcss.push(best_w);
     }
-    let bestK = 1;
-    let maxDiff = -Infinity;
-    if(wcss.length > 2) {
-        for(let i = 1; i < wcss.length - 1; i++) {
-            let d2 = (wcss[i-1] - wcss[i]) - (wcss[i] - wcss[i+1]);
-            if(d2 > maxDiff) { maxDiff = d2; bestK = i+1; }
+    
+    // Kneedle幾何学的エルボー判定 (直線からの垂直乖離最大点)
+    let bestK = 2;
+    if (wcss.length > 2) {
+        const w1 = wcss[0];
+        const wMax = wcss[wcss.length - 1];
+        const denom = (w1 - wMax);
+        if (denom > 1e-12) {
+            let maxDist = -Infinity;
+            for (let k = 2; k <= wcss.length - 1; k++) {
+                const x = (k - 1) / (wcss.length - 1);
+                const y = (wcss[k - 1] - wMax) / denom;
+                // 対角直線 y = 1 - x からの垂直距離 (1 - x) - y
+                const dist = (1 - x) - y;
+                if (dist > maxDist) {
+                    maxDist = dist;
+                    bestK = k;
+                }
+            }
         }
+    } else if (wcss.length === 2) {
+        bestK = 2;
+    } else {
+        bestK = 1;
     }
+
     const finalK = Math.max(1, Math.min(bestK, maxK));
     return { optimalK: finalK, wcss: wcss };
 }
@@ -1976,14 +2082,6 @@ function runPCA(preserveState = false) {
             }
         }
         
-        const optKInfo = determineOptimalK(X);
-        const optimalK = optKInfo.optimalK;
-        const effectiveK = (preserveState && savedK) ? Math.min(savedK, Math.min(10, n - 1)) : optimalK;
-        
-        if (clusterCount) clusterCount.value = effectiveK;
-        const clusterValSpan = document.getElementById('cluster-value');
-        if (clusterValSpan) clusterValSpan.textContent = effectiveK;
-
         pcaResult = {
             X: X,
             labels: activeLabels,
@@ -1994,8 +2092,8 @@ function runPCA(preserveState = false) {
             explainedVar: explainedVar,
             eigenValues: eigenValues,
             clusters: [],
-            optimalK: optimalK,
-            wcss: optKInfo.wcss
+            optimalK: 3,
+            wcss: []
         };
         
         setupSelects(p);
@@ -2009,8 +2107,34 @@ function runPCA(preserveState = false) {
         prevAxisY = axisYSelect.value;
         if (axisZSelect) prevAxisZ = axisZSelect.value;
 
-        // クラスタリングの計算（clusterSpace に応じて）
+        // クラスタ対象空間に応じたデータで最適クラスタ数を算出
         const dataForClustering = getClusteringInputData(pcaResult);
+        const optKInfo = determineOptimalK(dataForClustering);
+        const optimalK = optKInfo.optimalK;
+        pcaResult.optimalK = optimalK;
+        pcaResult.wcss = optKInfo.wcss;
+        
+        updateOptimalKUI(optimalK);
+        
+        const autoOptCb = document.getElementById('auto-optimal-k');
+        const isAutoOptimal = autoOptCb ? autoOptCb.checked : true;
+        const effectiveK = (!isAutoOptimal && preserveState && savedK) 
+            ? Math.min(savedK, Math.min(10, n - 1)) 
+            : optimalK;
+        
+        if (clusterCount) clusterCount.value = effectiveK;
+        const clusterValSpan = document.getElementById('cluster-value');
+        if (clusterValSpan) clusterValSpan.textContent = effectiveK;
+        
+        // スライダー増減ボタンの状態を更新
+        const decBtn = document.getElementById('btn-cluster-count-dec');
+        const incBtn = document.getElementById('btn-cluster-count-inc');
+        if (decBtn && incBtn && clusterCount) {
+            decBtn.disabled = effectiveK <= parseFloat(clusterCount.min || 1);
+            incBtn.disabled = effectiveK >= parseFloat(clusterCount.max || 10);
+        }
+
+        // クラスタリングの計算（clusterSpace に応じて）
         pcaResult.clusters = kMeansBest(dataForClustering, effectiveK).clusters;
         
         // Show results section first so container dimensions are valid
