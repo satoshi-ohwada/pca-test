@@ -8,9 +8,13 @@ let detectedOutlierIndices = new Set();
 let transformMode = 'std'; // 'std', 'log', 'robust', 'none'
 let missingMode = 'drop'; // 'drop', 'mean', 'median'
 let clusterSpace = 'all'; // 'all', 'pc'
-let clusterMethod = 'kmeans'; // 'kmeans', 'dbscan'
+let clusterMethod = 'kmeans'; // 'kmeans', 'dbscan', 'hdbscan'
 let dbscanEps = 1.0;
 let dbscanMinPts = 3;
+let hdbscanMinClusterSize = 3;
+let hdbscanMinSamples = 3;
+let hdbscanSelectionMethod = 'eom';
+let hdbscanAllowSingle = false;
 let splomMaxVars = 'all'; // '8', '10', '12', '15', 'all'
 let corrMethod = 'pearson'; // 'pearson', 'spearman'
 let pcaResult = null;
@@ -322,11 +326,369 @@ function autoConfigureDBSCAN(applyImmediately = true) {
     }
 }
 
+// HDBSCAN (Hierarchical Density-Based Spatial Clustering of Applications with Noise)
+function runHDBSCAN(points, minClusterSize = 3, minSamples = 3, allowSingleCluster = false, selectionMethod = 'eom') {
+    const n = points.length;
+    if (n === 0) return { labels: [], numClusters: 0, numNoise: 0, probabilities: [] };
+    if (n < minClusterSize) {
+        return {
+            labels: new Array(n).fill(-1),
+            numClusters: 0,
+            numNoise: n,
+            probabilities: new Array(n).fill(0)
+        };
+    }
+
+    // 1. Distance matrix
+    const distMatrix = Array.from({ length: n }, () => new Float64Array(n));
+    for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+            const d = euclideanDistance(points[i], points[j]);
+            distMatrix[i][j] = d;
+            distMatrix[j][i] = d;
+        }
+    }
+
+    // 2. Core distances: distance to minSamples-th nearest neighbor
+    const k = Math.max(1, Math.min(minSamples, n - 1));
+    const coreDistances = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+        const dList = [];
+        for (let j = 0; j < n; j++) {
+            if (i !== j) dList.push(distMatrix[i][j]);
+        }
+        dList.sort((a, b) => a - b);
+        coreDistances[i] = dList[Math.min(k - 1, dList.length - 1)] || 0;
+    }
+
+    // 3. Mutual Reachability Distance & MST (Prim's Algorithm)
+    const inMST = new Uint8Array(n);
+    const minDist = new Float64Array(n).fill(Infinity);
+    const parent = new Int32Array(n).fill(-1);
+
+    minDist[0] = 0;
+    const mstEdges = [];
+
+    for (let step = 0; step < n; step++) {
+        let u = -1;
+        let minW = Infinity;
+        for (let i = 0; i < n; i++) {
+            if (!inMST[i] && minDist[i] < minW) {
+                minW = minDist[i];
+                u = i;
+            }
+        }
+        if (u === -1) break;
+        inMST[u] = 1;
+        if (parent[u] !== -1) {
+            mstEdges.push({ u: parent[u], v: u, weight: minW });
+        }
+
+        for (let v = 0; v < n; v++) {
+            if (!inMST[v]) {
+                const mreach = Math.max(coreDistances[u], coreDistances[v], distMatrix[u][v]);
+                if (mreach < minDist[v]) {
+                    minDist[v] = mreach;
+                    parent[v] = u;
+                }
+            }
+        }
+    }
+
+    // 4. Sort MST edges by weight ascending
+    mstEdges.sort((a, b) => a.weight - b.weight);
+
+    // 5. Build Single Linkage Hierarchy using Union-Find
+    class DSU {
+        constructor(size) {
+            this.parent = new Int32Array(size);
+            for (let i = 0; i < size; i++) this.parent[i] = i;
+        }
+        find(i) {
+            let root = i;
+            while (root !== this.parent[root]) root = this.parent[root];
+            let curr = i;
+            while (curr !== root) {
+                const nxt = this.parent[curr];
+                this.parent[curr] = root;
+                curr = nxt;
+            }
+            return root;
+        }
+    }
+
+    const dsu = new DSU(2 * n);
+    const slTree = new Array(2 * n);
+    for (let i = 0; i < n; i++) {
+        slTree[i] = { id: i, left: null, right: null, weight: 0, size: 1, points: [i] };
+    }
+
+    let nextNodeId = n;
+    for (const edge of mstEdges) {
+        const rootU = dsu.find(edge.u);
+        const rootV = dsu.find(edge.v);
+        if (rootU !== rootV) {
+            const newNodeId = nextNodeId++;
+            const nodeU = slTree[rootU];
+            const nodeV = slTree[rootV];
+            const combinedPoints = nodeU.points.concat(nodeV.points);
+
+            slTree[newNodeId] = {
+                id: newNodeId,
+                left: nodeU,
+                right: nodeV,
+                weight: edge.weight,
+                size: combinedPoints.length,
+                points: combinedPoints
+            };
+
+            dsu.parent[rootU] = newNodeId;
+            dsu.parent[rootV] = newNodeId;
+        }
+    }
+
+    const slRoot = slTree[nextNodeId - 1];
+
+    // 6. Condense Cluster Tree
+    let nextClusterId = 0;
+    const condensedNodes = [];
+
+    function createCondensedNode(birthLambda, initialPoints) {
+        const cNode = {
+            id: nextClusterId++,
+            birth: birthLambda,
+            death: birthLambda,
+            points: new Set(initialPoints),
+            children: [],
+            stability: 0,
+            fallout: [] // { point, lambda }
+        };
+        condensedNodes.push(cNode);
+        return cNode;
+    }
+
+    const rootCluster = createCondensedNode(0, slRoot.points);
+
+    function condense(slNode, activeCluster) {
+        if (!slNode || slNode.size === 1) return;
+
+        const left = slNode.left;
+        const right = slNode.right;
+        const w = slNode.weight;
+        const lambda = w > 1e-12 ? (1.0 / w) : 1e9;
+
+        const leftLarge = left.size >= minClusterSize;
+        const rightLarge = right.size >= minClusterSize;
+
+        if (leftLarge && rightLarge) {
+            // True split
+            activeCluster.death = lambda;
+            const leftCluster = createCondensedNode(lambda, left.points);
+            const rightCluster = createCondensedNode(lambda, right.points);
+            activeCluster.children.push(leftCluster, rightCluster);
+
+            condense(left, leftCluster);
+            condense(right, rightCluster);
+        } else if (leftLarge && !rightLarge) {
+            // Right falls out of activeCluster
+            for (const p of right.points) {
+                activeCluster.fallout.push({ point: p, lambda });
+            }
+            condense(left, activeCluster);
+        } else if (!leftLarge && rightLarge) {
+            // Left falls out of activeCluster
+            for (const p of left.points) {
+                activeCluster.fallout.push({ point: p, lambda });
+            }
+            condense(right, activeCluster);
+        } else {
+            // Both fall out, activeCluster dies
+            activeCluster.death = lambda;
+            for (const p of left.points) {
+                activeCluster.fallout.push({ point: p, lambda });
+            }
+            for (const p of right.points) {
+                activeCluster.fallout.push({ point: p, lambda });
+            }
+        }
+    }
+
+    condense(slRoot, rootCluster);
+
+    // 7. Calculate Stability for each Condensed Node
+    for (const cNode of condensedNodes) {
+        let stab = 0;
+        for (const f of cNode.fallout) {
+            stab += (f.lambda - cNode.birth);
+        }
+        if (cNode.children.length > 0) {
+            let childPointsCount = 0;
+            for (const child of cNode.children) {
+                childPointsCount += child.points.size;
+            }
+            stab += childPointsCount * (cNode.death - cNode.birth);
+        }
+        cNode.stability = stab;
+    }
+
+    // 8. Cluster Selection (Excess of Mass - EOM or Leaf)
+    const selectedClusters = new Set();
+    const subtreeStability = new Map();
+
+    function computeSelection(cNode) {
+        if (cNode.children.length === 0) {
+            subtreeStability.set(cNode.id, cNode.stability);
+            return;
+        }
+
+        let childSum = 0;
+        for (const child of cNode.children) {
+            computeSelection(child);
+            childSum += subtreeStability.get(child.id);
+        }
+
+        if (cNode.stability > childSum) {
+            subtreeStability.set(cNode.id, cNode.stability);
+        } else {
+            subtreeStability.set(cNode.id, childSum);
+        }
+    }
+
+    computeSelection(rootCluster);
+
+    if (selectionMethod === 'leaf') {
+        // Leaf selection: choose all leaf clusters in condensed tree
+        function selectLeaves(cNode) {
+            if (cNode.children.length === 0) {
+                selectedClusters.add(cNode.id);
+                return;
+            }
+            for (const child of cNode.children) {
+                selectLeaves(child);
+            }
+        }
+        selectLeaves(rootCluster);
+    } else {
+        // EOM selection: choose clusters that maximize stability
+        function selectNodes(cNode) {
+            if (cNode.children.length === 0) {
+                selectedClusters.add(cNode.id);
+                return;
+            }
+
+            // If allowSingleCluster is false, do not allow the root cluster to be selected
+            // Force exploration of children so sub-clusters are extracted
+            if (!allowSingleCluster && cNode.id === rootCluster.id && cNode.children.length > 0) {
+                for (const child of cNode.children) {
+                    selectNodes(child);
+                }
+                return;
+            }
+
+            const maxStab = subtreeStability.get(cNode.id);
+            if (Math.abs(cNode.stability - maxStab) < 1e-9 && cNode.stability > 0) {
+                selectedClusters.add(cNode.id);
+            } else {
+                for (const child of cNode.children) {
+                    selectNodes(child);
+                }
+            }
+        }
+        selectNodes(rootCluster);
+    }
+
+    // 9. Assign cluster labels
+    const labels = new Array(n).fill(-1);
+    const probabilities = new Float64Array(n).fill(0);
+
+    let clusterIdx = 0;
+    const sortedSelected = Array.from(selectedClusters)
+        .map(id => condensedNodes[id])
+        .sort((a, b) => b.points.size - a.points.size);
+
+    for (const cNode of sortedSelected) {
+        const cId = clusterIdx++;
+        const maxLambda = Math.max(cNode.death, ...cNode.fallout.map(f => f.lambda), cNode.birth + 1e-6);
+        const lambdaRange = maxLambda - cNode.birth;
+
+        for (const p of cNode.points) {
+            if (labels[p] === -1) {
+                labels[p] = cId;
+                const f = cNode.fallout.find(item => item.point === p);
+                const pLambda = f ? f.lambda : maxLambda;
+                const prob = lambdaRange > 1e-9 ? Math.min(1.0, Math.max(0.1, (pLambda - cNode.birth) / lambdaRange)) : 1.0;
+                probabilities[p] = prob;
+            }
+        }
+    }
+
+    const numClusters = clusterIdx;
+    const numNoise = labels.filter(l => l === -1).length;
+
+    return { labels, numClusters, numNoise, probabilities: Array.from(probabilities) };
+}
+
+function updateHDBSCANSummaryUI() {
+    const summaryEl = document.getElementById('hdbscan-result-summary');
+    if (!summaryEl || !pcaResult || !pcaResult.hdbscanStats) return;
+    const { numClusters, numNoise } = pcaResult.hdbscanStats;
+    summaryEl.innerHTML = `
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+            <span>検出クラスタ: <strong style="color: #15803d;">${numClusters}個</strong></span>
+            <span>外れ値 (ノイズ): <strong style="color: ${numNoise > 0 ? '#dc2626' : '#16a34a'};">${numNoise}件</strong></span>
+        </div>
+    `;
+}
+
+function autoConfigureHDBSCAN(applyImmediately = true) {
+    hdbscanMinClusterSize = 3;
+    hdbscanMinSamples = 3;
+    hdbscanSelectionMethod = 'eom';
+    hdbscanAllowSingle = false;
+
+    const minClusterSizeInput = document.getElementById('hdbscan-min-cluster-size');
+    const minClusterSizeVal = document.getElementById('hdbscan-min-cluster-size-val');
+    const minSamplesInput = document.getElementById('hdbscan-min-samples');
+    const minSamplesVal = document.getElementById('hdbscan-min-samples-val');
+    const selectionMethodSelect = document.getElementById('hdbscan-selection-method');
+    const allowSingleCheck = document.getElementById('hdbscan-allow-single');
+
+    if (minClusterSizeInput) minClusterSizeInput.value = 3;
+    if (minClusterSizeVal) minClusterSizeVal.textContent = 3;
+    if (minSamplesInput) minSamplesInput.value = 3;
+    if (minSamplesVal) minSamplesVal.textContent = 3;
+    if (selectionMethodSelect) selectionMethodSelect.value = 'eom';
+    if (allowSingleCheck) allowSingleCheck.checked = false;
+
+    if (applyImmediately && clusterMethod === 'hdbscan') {
+        updateClustersForCurrentSettings();
+        updatePlot();
+    }
+}
+
 function updateClustersForCurrentSettings() {
     if (!pcaResult) return;
     const dataForClustering = getClusteringInputData(pcaResult);
     
-    if (clusterMethod === 'dbscan') {
+    if (clusterMethod === 'hdbscan') {
+        const minClusterSizeInput = document.getElementById('hdbscan-min-cluster-size');
+        const minSamplesInput = document.getElementById('hdbscan-min-samples');
+        const selectionMethodSelect = document.getElementById('hdbscan-selection-method');
+        const allowSingleCheck = document.getElementById('hdbscan-allow-single');
+
+        const minClusterSize = minClusterSizeInput ? parseInt(minClusterSizeInput.value) : hdbscanMinClusterSize;
+        const minSamples = minSamplesInput ? parseInt(minSamplesInput.value) : hdbscanMinSamples;
+        const selectionMethod = selectionMethodSelect ? selectionMethodSelect.value : hdbscanSelectionMethod;
+        const allowSingle = allowSingleCheck ? allowSingleCheck.checked : hdbscanAllowSingle;
+
+        const hdbRes = runHDBSCAN(dataForClustering, minClusterSize, minSamples, allowSingle, selectionMethod);
+        pcaResult.clusters = hdbRes.labels;
+        pcaResult.hdbscanStats = {
+            numClusters: hdbRes.numClusters,
+            numNoise: hdbRes.numNoise
+        };
+        updateHDBSCANSummaryUI();
+    } else if (clusterMethod === 'dbscan') {
         const epsInput = document.getElementById('dbscan-eps');
         const minPtsInput = document.getElementById('dbscan-min-pts');
         const eps = epsInput ? parseFloat(epsInput.value) : dbscanEps;
@@ -610,11 +972,14 @@ setupSliderStepButtons('vector-scale', 'btn-vector-scale-dec', 'btn-vector-scale
 setupSliderStepButtons('cluster-count', 'btn-cluster-count-dec', 'btn-cluster-count-inc');
 setupSliderStepButtons('dbscan-eps', 'btn-dbscan-eps-dec', 'btn-dbscan-eps-inc');
 setupSliderStepButtons('dbscan-min-pts', 'btn-dbscan-min-pts-dec', 'btn-dbscan-min-pts-inc');
+setupSliderStepButtons('hdbscan-min-cluster-size', 'btn-hdbscan-min-cluster-size-dec', 'btn-hdbscan-min-cluster-size-inc');
+setupSliderStepButtons('hdbscan-min-samples', 'btn-hdbscan-min-samples-dec', 'btn-hdbscan-min-samples-inc');
 
-// DBSCAN コントロールリスナー
+// クラスタリング手法 コントロールリスナー
 const clusterMethodSelect = document.getElementById('cluster-method-select');
 const kmeansControlsPanel = document.getElementById('kmeans-controls-panel');
 const dbscanControlsPanel = document.getElementById('dbscan-controls-panel');
+const hdbscanControlsPanel = document.getElementById('hdbscan-controls-panel');
 
 if (clusterMethodSelect) {
     clusterMethodSelect.addEventListener('change', (e) => {
@@ -622,10 +987,17 @@ if (clusterMethodSelect) {
         if (clusterMethod === 'dbscan') {
             if (kmeansControlsPanel) kmeansControlsPanel.classList.add('hidden');
             if (dbscanControlsPanel) dbscanControlsPanel.classList.remove('hidden');
+            if (hdbscanControlsPanel) hdbscanControlsPanel.classList.add('hidden');
             if (pcaResult) autoConfigureDBSCAN(true);
+        } else if (clusterMethod === 'hdbscan') {
+            if (kmeansControlsPanel) kmeansControlsPanel.classList.add('hidden');
+            if (dbscanControlsPanel) dbscanControlsPanel.classList.add('hidden');
+            if (hdbscanControlsPanel) hdbscanControlsPanel.classList.remove('hidden');
+            if (pcaResult) autoConfigureHDBSCAN(true);
         } else {
             if (kmeansControlsPanel) kmeansControlsPanel.classList.remove('hidden');
             if (dbscanControlsPanel) dbscanControlsPanel.classList.add('hidden');
+            if (hdbscanControlsPanel) hdbscanControlsPanel.classList.add('hidden');
             if (pcaResult) {
                 updateClustersForCurrentSettings();
                 updatePlot();
@@ -671,6 +1043,66 @@ if (btnAutoDbscanEps) {
     });
 }
 
+// HDBSCAN コントロールリスナー
+const hdbscanMinClusterSizeInput = document.getElementById('hdbscan-min-cluster-size');
+if (hdbscanMinClusterSizeInput) {
+    const handleMinClusterSizeChange = (e) => {
+        hdbscanMinClusterSize = parseInt(e.target.value);
+        const valSpan = document.getElementById('hdbscan-min-cluster-size-val');
+        if (valSpan) valSpan.textContent = hdbscanMinClusterSize;
+        if (pcaResult && clusterMethod === 'hdbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    };
+    hdbscanMinClusterSizeInput.addEventListener('input', handleMinClusterSizeChange);
+    hdbscanMinClusterSizeInput.addEventListener('change', handleMinClusterSizeChange);
+}
+
+const hdbscanMinSamplesInput = document.getElementById('hdbscan-min-samples');
+if (hdbscanMinSamplesInput) {
+    const handleMinSamplesChange = (e) => {
+        hdbscanMinSamples = parseInt(e.target.value);
+        const valSpan = document.getElementById('hdbscan-min-samples-val');
+        if (valSpan) valSpan.textContent = hdbscanMinSamples;
+        if (pcaResult && clusterMethod === 'hdbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    };
+    hdbscanMinSamplesInput.addEventListener('input', handleMinSamplesChange);
+    hdbscanMinSamplesInput.addEventListener('change', handleMinSamplesChange);
+}
+
+const hdbscanSelectionMethodSelect = document.getElementById('hdbscan-selection-method');
+if (hdbscanSelectionMethodSelect) {
+    hdbscanSelectionMethodSelect.addEventListener('change', (e) => {
+        hdbscanSelectionMethod = e.target.value;
+        if (pcaResult && clusterMethod === 'hdbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    });
+}
+
+const hdbscanAllowSingleCheck = document.getElementById('hdbscan-allow-single');
+if (hdbscanAllowSingleCheck) {
+    hdbscanAllowSingleCheck.addEventListener('change', (e) => {
+        hdbscanAllowSingle = e.target.checked;
+        if (pcaResult && clusterMethod === 'hdbscan') {
+            updateClustersForCurrentSettings();
+            updatePlot();
+        }
+    });
+}
+
+const btnAutoHdbscan = document.getElementById('btn-auto-hdbscan');
+if (btnAutoHdbscan) {
+    btnAutoHdbscan.addEventListener('click', () => {
+        autoConfigureHDBSCAN(true);
+    });
+}
+
 if (btnReset) {
     btnReset.addEventListener('click', () => {
         transformMode = 'std';
@@ -680,6 +1112,10 @@ if (btnReset) {
         corrMethod = 'pearson';
         dbscanEps = 1.0;
         dbscanMinPts = 3;
+        hdbscanMinClusterSize = 3;
+        hdbscanMinSamples = 3;
+        hdbscanSelectionMethod = 'eom';
+        hdbscanAllowSingle = false;
         disabledFeatures = new Set();
         disabledRowIndices = new Set();
         detectedOutlierIndices = new Set();
@@ -690,6 +1126,20 @@ if (btnReset) {
         if (clusterMethodSelect) clusterMethodSelect.value = 'kmeans';
         if (kmeansControlsPanel) kmeansControlsPanel.classList.remove('hidden');
         if (dbscanControlsPanel) dbscanControlsPanel.classList.add('hidden');
+        if (hdbscanControlsPanel) hdbscanControlsPanel.classList.add('hidden');
+
+        const minClusterSizeInput = document.getElementById('hdbscan-min-cluster-size');
+        const minClusterSizeVal = document.getElementById('hdbscan-min-cluster-size-val');
+        const minSamplesInput = document.getElementById('hdbscan-min-samples');
+        const minSamplesVal = document.getElementById('hdbscan-min-samples-val');
+        const selectionMethodSelect = document.getElementById('hdbscan-selection-method');
+        const allowSingleCheck = document.getElementById('hdbscan-allow-single');
+        if (minClusterSizeInput) minClusterSizeInput.value = 3;
+        if (minClusterSizeVal) minClusterSizeVal.textContent = 3;
+        if (minSamplesInput) minSamplesInput.value = 3;
+        if (minSamplesVal) minSamplesVal.textContent = 3;
+        if (selectionMethodSelect) selectionMethodSelect.value = 'eom';
+        if (allowSingleCheck) allowSingleCheck.checked = false;
 
         const transformSelect = document.getElementById('transform-mode-select');
         const transformSelect2 = document.getElementById('transform-mode-select-step2');
@@ -2500,7 +2950,26 @@ function runPCA(preserveState = false) {
         }
 
         // クラスタリングの計算（clusterSpace および clusterMethod に応じて）
-        if (clusterMethod === 'dbscan') {
+        if (clusterMethod === 'hdbscan') {
+            autoConfigureHDBSCAN(false);
+            const minClusterSizeInput = document.getElementById('hdbscan-min-cluster-size');
+            const minSamplesInput = document.getElementById('hdbscan-min-samples');
+            const selectionMethodSelect = document.getElementById('hdbscan-selection-method');
+            const allowSingleCheck = document.getElementById('hdbscan-allow-single');
+
+            const minClusterSize = minClusterSizeInput ? parseInt(minClusterSizeInput.value) : hdbscanMinClusterSize;
+            const minSamples = minSamplesInput ? parseInt(minSamplesInput.value) : hdbscanMinSamples;
+            const selectionMethod = selectionMethodSelect ? selectionMethodSelect.value : hdbscanSelectionMethod;
+            const allowSingle = allowSingleCheck ? allowSingleCheck.checked : hdbscanAllowSingle;
+
+            const hdbRes = runHDBSCAN(dataForClustering, minClusterSize, minSamples, allowSingle, selectionMethod);
+            pcaResult.clusters = hdbRes.labels;
+            pcaResult.hdbscanStats = {
+                numClusters: hdbRes.numClusters,
+                numNoise: hdbRes.numNoise
+            };
+            updateHDBSCANSummaryUI();
+        } else if (clusterMethod === 'dbscan') {
             autoConfigureDBSCAN(false);
             const epsInput = document.getElementById('dbscan-eps');
             const minPtsInput = document.getElementById('dbscan-min-pts');
@@ -2984,7 +3453,16 @@ function updateSummary(xIdx, yIdx, varX, varY, topX, topY, zIdx, varZ, topZ) {
             ? "🎯 <strong>表示中主成分空間 (2D/3D平面)</strong> に基づきクラスタリングを実行中（平面上で領域が重なりにくく綺麗に分割されます）。"
             : "🌐 <strong>全変数の多次元空間</strong> に基づきクラスタリングを実行中（多次元の総合的類似度を忠実に反映。2D平面への射影のため楕円に重なりが生じる場合があります）。";
 
-        if (clusterMethod === 'dbscan') {
+        if (clusterMethod === 'hdbscan') {
+            const stats = pcaResult.hdbscanStats || { numClusters: 0, numNoise: 0 };
+            const methodLabel = hdbscanSelectionMethod === 'leaf' ? 'Leaf (細分化・葉クラスタ)' : 'EOM (安定性優先・Excess of Mass)';
+            clusterInsightText = `<p style="margin-top: 0.5rem; background: #f0fdf4; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #10b981; font-size: 0.9em;">
+                <strong>🌲 HDBSCAN (階層的密度クラスタリング分析):</strong><br>
+                最小クラスタサイズ = <strong>${hdbscanMinClusterSize}</strong>、最小サンプル数 = <strong>${hdbscanMinSamples}</strong>、抽出方式: <strong>${methodLabel}</strong> により、
+                <strong>${stats.numClusters} 個のクラスタ</strong> と <strong>${stats.numNoise} 件の外れ値（ノイズ）</strong> を検出しました。<br>
+                <span style="font-size:0.85em; color:#047857; display:block; margin-top:0.25rem;">${spaceDesc}</span>
+            </p>`;
+        } else if (clusterMethod === 'dbscan') {
             const stats = pcaResult.dbscanStats || { numClusters: 0, numNoise: 0 };
             clusterInsightText = `<p style="margin-top: 0.5rem; background: #faf5ff; padding: 0.6rem 0.8rem; border-radius: 6px; border-left: 3px solid #8b5cf6; font-size: 0.9em;">
                 <strong>🌐 DBSCAN (密度クラスタリング分析):</strong><br>
