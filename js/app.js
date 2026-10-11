@@ -138,20 +138,8 @@ function loadSampleCsvFile(filePath) {
             return res.text();
         })
         .then(csvText => {
-            Papa.parse(csvText, {
-                complete: function(results) {
-                    if (results.data && results.data.length >= 3) {
-                        processRawData(results.data);
-                    } else {
-                        alert("CSVデータのパースに失敗しました。行数が足りないか形式が不正です。");
-                    }
-                },
-                error: function(err) {
-                    alert("CSVパースエラー: " + err);
-                },
-                header: false,
-                skipEmptyLines: true
-            });
+            const ext = filePath.split('.').pop().toLowerCase();
+            parseTextWithAutoDelimiter(csvText, ext);
         })
         .catch(err => {
             console.error("fetch sample error:", err);
@@ -741,46 +729,130 @@ if (btnParsePaste && pasteInput) {
             alert("データを貼り付けてからボタンを押してください。");
             return;
         }
-        Papa.parse(text, {
-            complete: function(results) {
-                if (results.data && results.data.length >= 3) {
-                    processRawData(results.data);
-                } else {
-                    alert("読み込めるデータ行が不足しています。表形式（ヘッダー＋2行以上）のデータをコピーしてください。");
-                }
-            },
-            header: false,
-            skipEmptyLines: true
-        });
+        parseTextWithAutoDelimiter(text, 'txt');
     });
 }
 
 
 // --- Functions ---
 
-function handleFile(file) {
-    const ext = file.name.split('.').pop().toLowerCase();
-    
-    if (ext === 'csv') {
-        Papa.parse(file, {
-            complete: function(results) {
-                processRawData(results.data);
-            },
+function parseTextWithAutoDelimiter(text, ext = 'txt') {
+    if (!text || text.trim() === '') {
+        alert("データが空です。有効な表形式のデータを入力してください。");
+        return;
+    }
+
+    const trimmed = text.trim();
+
+    // 1. TSV形式 (.tsv) の場合: タブ区切りを最優先
+    if (ext === 'tsv') {
+        const tsvRes = Papa.parse(trimmed, {
+            delimiter: "\t",
             header: false,
             skipEmptyLines: true
         });
+        if (tsvRes.data && tsvRes.data.length >= 3 && tsvRes.data[0].length >= 2) {
+            processRawData(tsvRes.data);
+            return;
+        }
+        // タブで2列以上にならなかった場合は、自動判別へフォールバック
+    }
+
+    // 2. CSV形式 (.csv) の場合: カンマ区切りを最優先
+    if (ext === 'csv') {
+        const csvRes = Papa.parse(trimmed, {
+            delimiter: ",",
+            header: false,
+            skipEmptyLines: true
+        });
+        if (csvRes.data && csvRes.data.length >= 3 && csvRes.data[0].length >= 2) {
+            processRawData(csvRes.data);
+            return;
+        }
+        // カンマで2列以上にならなかった場合は、自動判別へフォールバック
+    }
+
+    // 3. PapaParse による自動デリミタ検出 (カンマ、タブ、セミコロン、パイプ等)
+    const autoRes = Papa.parse(trimmed, {
+        delimiter: "", // 自動検出
+        header: false,
+        skipEmptyLines: true
+    });
+
+    if (autoRes.data && autoRes.data.length >= 3) {
+        const firstCols = autoRes.data[0].length;
+        if (firstCols >= 2) {
+            // 列数の一貫性を検査（先頭15行中80%以上が同等の列数か）
+            const sample = autoRes.data.slice(0, Math.min(15, autoRes.data.length));
+            const consistentCount = sample.filter(r => Math.abs(r.length - firstCols) <= 1).length;
+            if (consistentCount / sample.length >= 0.8) {
+                processRawData(autoRes.data);
+                return;
+            }
+        }
+    }
+
+    // 4. 空白（スペース / 連続空白）区切りの検出
+    const lines = trimmed.split(/\r?\n/).map(l => l.trim()).filter(l => l.length > 0);
+    if (lines.length >= 3) {
+        const wsRows = lines.map(line => line.split(/\s+/));
+        const firstCols = wsRows[0].length;
+        if (firstCols >= 2) {
+            const sample = wsRows.slice(0, Math.min(15, wsRows.length));
+            const consistentCount = sample.filter(r => Math.abs(r.length - firstCols) <= 1).length;
+            if (consistentCount / sample.length >= 0.8) {
+                processRawData(wsRows);
+                return;
+            }
+        }
+    }
+
+    // 5. セミコロン区切り明示的フォールバック
+    const semiRes = Papa.parse(trimmed, {
+        delimiter: ";",
+        header: false,
+        skipEmptyLines: true
+    });
+    if (semiRes.data && semiRes.data.length >= 3 && semiRes.data[0].length >= 2) {
+        processRawData(semiRes.data);
+        return;
+    }
+
+    // 6. 区切りが判断できない場合
+    const extNotice = ext ? `（.${ext}）` : "";
+    alert(`⚠️ ファイル${extNotice}の区切り文字を自動判別できませんでした。\n\n【原因・ヒント】\n・タブ (\\t)、カンマ (,)、セミコロン (;)、または空白で区切られた「2列以上（行ラベル＋数値列）」の表形式データである必要があります。\n・1列のみの文章や、行ごとに区切りが不揃いなデータは読み込めません。\n・区切り文字を確認のうえ、ファイル形式や内容を整えて再試行してください。`);
+}
+
+function handleFile(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    
+    if (ext === 'csv' || ext === 'tsv' || ext === 'txt') {
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const text = e.target.result;
+            parseTextWithAutoDelimiter(text, ext);
+        };
+        reader.onerror = () => {
+            alert("ファイルの読み込み中にエラーが発生しました。");
+        };
+        reader.readAsText(file, 'utf-8');
     } else if (ext === 'xlsx' || ext === 'xls') {
         const reader = new FileReader();
         reader.onload = (e) => {
-            const data = new Uint8Array(e.target.result);
-            const workbook = XLSX.read(data, {type: 'array'});
-            const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-            const jsonData = XLSX.utils.sheet_to_json(firstSheet, {header: 1});
-            processRawData(jsonData);
+            try {
+                const data = new Uint8Array(e.target.result);
+                const workbook = XLSX.read(data, {type: 'array'});
+                const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                const jsonData = XLSX.utils.sheet_to_json(firstSheet, {header: 1});
+                processRawData(jsonData);
+            } catch (err) {
+                console.error("XLSX read error:", err);
+                alert("Excelファイルの読み込みに失敗しました。ファイルが破損していないか確認してください。");
+            }
         };
         reader.readAsArrayBuffer(file);
     } else {
-        alert("未対応のファイル形式です。.csv または .xlsx を使用してください。");
+        alert("未対応のファイル形式です。.csv, .tsv, .txt, または .xlsx を使用してください。");
     }
 }
 
