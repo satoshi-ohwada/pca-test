@@ -3342,6 +3342,7 @@ function updatePlot() {
     }
 
     const traces = [];
+    const clusterShapes = [];
     
     const colors = [
         '#3b82f6', // blue
@@ -3396,18 +3397,19 @@ function updatePlot() {
                 if (!is3D) {
                     const ellipse = getEllipsePoints(cX, cY, 100, 2.0);
                     if (ellipse) {
-                        traces.push({
-                            x: ellipse.x,
-                            y: ellipse.y,
-                            mode: 'lines',
-                            type: 'scatter',
-                            name: `クラスタ ${c + 1} 領域`,
+                        // 楕円を traces ではなく layout.shapes として描画することで、
+                        // 軸の自動スケーリングが楕円に引きずられて拡大するのを防ぎ、
+                        // クラスタリングOFF時（データ点基準）と同じ大きさを基本に維持する
+                        const pathStr = 'M ' + ellipse.x.map((x, i) => `${x.toFixed(3)} ${ellipse.y[i].toFixed(3)}`).join(' L ') + ' Z';
+                        clusterShapes.push({
+                            type: 'path',
+                            path: pathStr,
+                            xref: 'x',
+                            yref: 'y',
                             line: { color: colors[c % colors.length], width: 1.5 },
-                            fill: 'toself',
                             fillcolor: colors[c % colors.length],
                             opacity: 0.12,
-                            showlegend: false,
-                            hoverinfo: 'skip'
+                            layer: 'below'
                         });
                     }
                 }
@@ -3657,6 +3659,9 @@ function updatePlot() {
             zeroline: true 
         };
         layout.annotations = annotations;
+        if (clusterShapes.length > 0) {
+            layout.shapes = clusterShapes;
+        }
     }
     
     Plotly.newPlot('plot-container', traces, layout, {responsive: true, displaylogo: false});
