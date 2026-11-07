@@ -801,9 +801,19 @@ if (vectorScale) {
     });
 }
 const showLabelsCheckbox = document.getElementById('show-labels');
+const scatterRepelContainer = document.getElementById('scatter-repel-container');
+const scatterRepelCheck = document.getElementById('scatter-repel-check');
 if (showLabelsCheckbox) {
     showLabelsCheckbox.addEventListener('change', () => {
-        if(pcaResult) updatePlot();
+        if (scatterRepelContainer) {
+            scatterRepelContainer.style.display = showLabelsCheckbox.checked ? 'flex' : 'none';
+        }
+        if (pcaResult) updatePlot();
+    });
+}
+if (scatterRepelCheck) {
+    scatterRepelCheck.addEventListener('change', () => {
+        if (pcaResult) updatePlot();
     });
 }
 const showVectorsCheckbox = document.getElementById('show-vectors');
@@ -3032,6 +3042,209 @@ function setupSelects(numComponents) {
     }
 }
 
+/**
+ * Force-directed label placement algorithm for Plotly scatter plots (ggrepel-like)
+ * 散布図のデータ点およびラベル同士の重なりを力学シミュレーションで回避し、
+ * 最適なピクセルオフセット (ax, ay) と引き出し線を計算する。
+ */
+function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWidth = 850, containerHeight = 600) {
+    if (!pointItems || pointItems.length === 0) return [];
+
+    const xMin = Math.min(...scoresX);
+    const xMax = Math.max(...scoresX);
+    const yMin = Math.min(...scoresY);
+    const yMax = Math.max(...scoresY);
+    const spanX = (xMax - xMin) || 1;
+    const spanY = (yMax - yMin) || 1;
+
+    // マージン (l: 60, r: 50, t: 50, b: 70) を除いた実描画エリア推定
+    const plotAreaW = Math.max(350, containerWidth - 110);
+    const plotAreaH = Math.max(250, containerHeight - 120);
+
+    const scaleX = plotAreaW / spanX;
+    const scaleY = plotAreaH / spanY;
+
+    const toPx = (x) => (x - xMin) * scaleX;
+    const toPy = (y) => (yMax - y) * scaleY; // y軸反転
+
+    const labels = pointItems.map((p, idx) => {
+        const px = toPx(p.x);
+        const py = toPy(p.y);
+        const str = String(p.label || '');
+        
+        let textW = 0;
+        for (let i = 0; i < str.length; i++) {
+            textW += (str.charCodeAt(i) > 255) ? 11 : 6.5;
+        }
+        const w = textW + 8;
+        const h = 18;
+        const r = 6;
+
+        // 初期位置: 点の真上 (Plotlyのax, ay: ay負が上)
+        // わずかな決定論的ジッター（同じ座標に完全重合した点同士の反発用）
+        const angle = (idx * 1.6180339887) % (2 * Math.PI);
+        const jitterX = Math.cos(angle) * 0.5;
+        const jitterY = Math.sin(angle) * 0.5;
+
+        const origAx = 0;
+        const origAy = -14;
+
+        return {
+            idx,
+            p,
+            px, py,
+            r, w, h,
+            ax: origAx + jitterX,
+            ay: origAy + jitterY,
+            origAx, origAy,
+            vx: 0,
+            vy: 0
+        };
+    });
+
+    const num = labels.length;
+    const iterations = Math.min(75, Math.max(40, Math.round(num * 1.2)));
+
+    for (let iter = 0; iter < iterations; iter++) {
+        const cooling = Math.max(0.2, 1 - (iter / iterations) * 0.75);
+
+        // 1. ラベル同士の斥力 (Label-Label Repulsion)
+        for (let i = 0; i < num; i++) {
+            const A = labels[i];
+            const curAx = A.px + A.ax;
+            const curAy = A.py + A.ay;
+
+            for (let j = i + 1; j < num; j++) {
+                const B = labels[j];
+                const curBx = B.px + B.ax;
+                const curBy = B.py + B.ay;
+
+                let dx = curBx - curAx;
+                let dy = curBy - curAy;
+
+                const minDistX = (A.w + B.w) / 2 + 6;
+                const minDistY = (A.h + B.h) / 2 + 4;
+
+                const absDx = Math.abs(dx);
+                const absDy = Math.abs(dy);
+
+                if (absDx < minDistX && absDy < minDistY) {
+                    if (absDx < 0.001 && absDy < 0.001) {
+                        dx = (i % 2 === 0 ? 1 : -1) * 0.1;
+                        dy = (j % 2 === 0 ? 1 : -1) * 0.1;
+                    }
+                    const overlapX = minDistX - absDx;
+                    const overlapY = minDistY - absDy;
+
+                    const signX = (dx >= 0 ? 1 : -1);
+                    const signY = (dy >= 0 ? 1 : -1);
+
+                    let fx = 0, fy = 0;
+                    if (overlapX < overlapY * 1.3) {
+                        fx = signX * overlapX * 0.45;
+                        fy = signY * overlapY * 0.15;
+                    } else {
+                        fx = signX * overlapX * 0.15;
+                        fy = signY * overlapY * 0.45;
+                    }
+
+                    A.vx -= fx;
+                    A.vy -= fy;
+                    B.vx += fx;
+                    B.vy += fy;
+                }
+            }
+        }
+
+        // 2. データ点との斥力 (Label-Point Repulsion)
+        // ※ 他の点(j !== i)との重なりを回避。自分自身の点とは近傍にいて良い。
+        for (let i = 0; i < num; i++) {
+            const A = labels[i];
+            const curAx = A.px + A.ax;
+            const curAy = A.py + A.ay;
+
+            for (let j = 0; j < num; j++) {
+                if (i === j) continue; // 自分自身の点とは斥力を発生させない
+                const P = labels[j];
+
+                const clampX = Math.max(curAx - A.w / 2, Math.min(curAx + A.w / 2, P.px));
+                const clampY = Math.max(curAy - A.h / 2, Math.min(curAy + A.h / 2, P.py));
+
+                let dx = clampX - P.px;
+                let dy = clampY - P.py;
+                let dist = Math.sqrt(dx * dx + dy * dy);
+
+                const minDist = P.r + 5;
+                if (dist < minDist) {
+                    if (dist === 0) {
+                        dx = (Math.random() - 0.5) || 1;
+                        dy = -1;
+                        dist = 1;
+                    }
+                    const push = (minDist - dist);
+                    const fx = (dx / dist) * push * 0.55;
+                    const fy = (dy / dist) * push * 0.55;
+                    A.vx += fx;
+                    A.vy += fy;
+                }
+            }
+        }
+
+        // 3. 元のアンカー引力 (Spring to original anchor)
+        for (let i = 0; i < num; i++) {
+            const A = labels[i];
+            const dAx = A.origAx - A.ax;
+            const dAy = A.origAy - A.ay;
+
+            A.vx += dAx * 0.055;
+            A.vy += dAy * 0.055;
+        }
+
+        // 4. 移動適用と減衰
+        for (let i = 0; i < num; i++) {
+            const A = labels[i];
+            A.ax += A.vx * cooling;
+            A.ay += A.vy * cooling;
+
+            A.vx *= 0.62;
+            A.vy *= 0.62;
+        }
+    }
+
+    const minDisplacement = 8; // 初期位置からの移動量がこの閾値未満なら引き出し線を引かない (ggrepel min.segment.length)
+
+    return labels.map(lbl => {
+        const displacement = Math.sqrt(
+            (lbl.ax - lbl.origAx) * (lbl.ax - lbl.origAx) + 
+            (lbl.ay - lbl.origAy) * (lbl.ay - lbl.origAy)
+        );
+        const showArrow = displacement >= minDisplacement;
+
+        return {
+            x: lbl.p.x,
+            y: lbl.p.y,
+            xref: 'x',
+            yref: 'y',
+            text: String(lbl.p.label || ''),
+            showarrow: showArrow,
+            ax: Math.round(lbl.ax),
+            ay: Math.round(lbl.ay),
+            arrowcolor: 'rgba(100, 116, 139, 0.55)',
+            arrowwidth: 1,
+            arrowhead: 0,
+            standoff: 4,
+            font: {
+                size: 11,
+                color: lbl.p.cluster === -1 ? '#64748b' : '#1e293b'
+            },
+            bgcolor: 'rgba(255, 255, 255, 0.88)',
+            bordercolor: 'rgba(203, 213, 225, 0.7)',
+            borderwidth: 0.5,
+            borderpad: 2
+        };
+    });
+}
+
 function updatePlot() {
     if (!pcaResult) return;
     
@@ -3058,12 +3271,13 @@ function updatePlot() {
     const topZ = is3D ? getTopContributors(loadingsZ) : "";
     
     const showLabels = document.getElementById('show-labels') ? document.getElementById('show-labels').checked : true;
+    const isRepel = !is3D && showLabels && (document.getElementById('scatter-repel-check') ? document.getElementById('scatter-repel-check').checked : true);
     const showVectors = document.getElementById('show-vectors') ? document.getElementById('show-vectors').checked : true;
     const enableClustering = document.getElementById('enable-clustering') ? document.getElementById('enable-clustering').checked : true;
     const plotLabels = pcaResult.labels || getActiveLabels();
     
     const globalPositions = [];
-    if (showLabels && !is3D) {
+    if (showLabels && !is3D && !isRepel) {
         const xMin = Math.min(...scoresX);
         const xMax = Math.max(...scoresX);
         const yMin = Math.min(...scoresY);
@@ -3116,7 +3330,7 @@ function updatePlot() {
         const trace = {
             x: scoresX,
             y: scoresY,
-            mode: showLabels ? 'markers+text' : 'markers',
+            mode: (showLabels && !isRepel) ? 'markers+text' : 'markers',
             type: is3D ? 'scatter3d' : 'scatter',
             name: 'データ点',
             text: plotLabels,
@@ -3129,7 +3343,7 @@ function updatePlot() {
             textfont: { size: 11, color: '#1e293b' }
         };
         if (is3D) trace.z = scoresZ;
-        if (!is3D && showLabels) trace.textposition = globalPositions;
+        if (!is3D && showLabels && !isRepel) trace.textposition = globalPositions;
         traces.push(trace);
     } else {
         const uniqueClusters = Array.from(new Set(pcaResult.clusters));
@@ -3146,7 +3360,7 @@ function updatePlot() {
                     cY.push(scoresY[i]);
                     if (is3D) cZ.push(scoresZ[i]);
                     cText.push(plotLabels[i]);
-                    if (showLabels && !is3D) cPos.push(globalPositions[i]);
+                    if (showLabels && !is3D && !isRepel) cPos.push(globalPositions[i]);
                 }
             }
             if (cX.length > 0) {
@@ -3172,7 +3386,7 @@ function updatePlot() {
                 const trace = {
                     x: cX,
                     y: cY,
-                    mode: showLabels ? 'markers+text' : 'markers',
+                    mode: (showLabels && !isRepel) ? 'markers+text' : 'markers',
                     type: is3D ? 'scatter3d' : 'scatter',
                     name: `クラスタ ${c + 1}`,
                     text: cText,
@@ -3185,7 +3399,7 @@ function updatePlot() {
                     textfont: { size: 11, color: '#1e293b' }
                 };
                 if (is3D) trace.z = cZ;
-                if (!is3D && showLabels) trace.textposition = cPos;
+                if (!is3D && showLabels && !isRepel) trace.textposition = cPos;
                 traces.push(trace);
             }
         }
@@ -3199,14 +3413,14 @@ function updatePlot() {
                     nY.push(scoresY[i]);
                     if (is3D) nZ.push(scoresZ[i]);
                     nText.push(plotLabels[i]);
-                    if (showLabels && !is3D) nPos.push(globalPositions[i]);
+                    if (showLabels && !is3D && !isRepel) nPos.push(globalPositions[i]);
                 }
             }
             if (nX.length > 0) {
                 const noiseTrace = {
                     x: nX,
                     y: nY,
-                    mode: showLabels ? 'markers+text' : 'markers',
+                    mode: (showLabels && !isRepel) ? 'markers+text' : 'markers',
                     type: is3D ? 'scatter3d' : 'scatter',
                     name: '⚠️ 外れ値 (ノイズ)',
                     text: nText,
@@ -3220,7 +3434,7 @@ function updatePlot() {
                     textfont: { size: 11, color: '#64748b' }
                 };
                 if (is3D) noiseTrace.z = nZ;
-                if (!is3D && showLabels) noiseTrace.textposition = nPos;
+                if (!is3D && showLabels && !isRepel) noiseTrace.textposition = nPos;
                 traces.push(noiseTrace);
             }
         }
@@ -3235,6 +3449,24 @@ function updatePlot() {
     const scalingFactor = (maxScore / maxLoading) * 0.8 * currentScale;
     
     const annotations = [];
+    
+    // ggrepel風ラベル重なり自動回避 (2D散布図時)
+    if (isRepel) {
+        const pointItems = [];
+        for (let i = 0; i < scoresX.length; i++) {
+            pointItems.push({
+                x: scoresX[i],
+                y: scoresY[i],
+                label: plotLabels[i],
+                cluster: (pcaResult.clusters && pcaResult.clusters.length > i) ? pcaResult.clusters[i] : 0
+            });
+        }
+        const plotContainer = document.getElementById('plot-container');
+        const cW = plotContainer ? plotContainer.clientWidth : 850;
+        const cH = plotContainer ? plotContainer.clientHeight : 600;
+        const repelAnnotations = computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, cW, cH);
+        annotations.push(...repelAnnotations);
+    }
     
     if (showVectors) {
         const activeFeatures = getActiveFeatures();
