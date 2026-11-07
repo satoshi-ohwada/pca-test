@@ -3067,6 +3067,9 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
     const toPx = (x) => (x - xMin) * scaleX;
     const toPy = (y) => (yMax - y) * scaleY; // y軸反転
 
+    const POINT_RADIUS = 7;
+    const POINT_CLEARANCE = 8; // 点とラベルの安全クリアランス (合計 15px)
+
     const labels = pointItems.map((p, idx) => {
         const px = toPx(p.x);
         const py = toPy(p.y);
@@ -3074,26 +3077,26 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
         
         let textW = 0;
         for (let i = 0; i < str.length; i++) {
-            textW += (str.charCodeAt(i) > 255) ? 11 : 6.5;
+            const code = str.charCodeAt(i);
+            textW += (code > 255) ? 11.5 : 6.8;
         }
-        const w = textW + 8;
-        const h = 18;
-        const r = 6;
+        const w = textW + 4;
+        const h = 17;
 
-        // 初期位置: 点の真上 (Plotlyのax, ay: ay負が上)
-        // わずかな決定論的ジッター（同じ座標に完全重合した点同士の反発用）
-        const angle = (idx * 1.6180339887) % (2 * Math.PI);
-        const jitterX = Math.cos(angle) * 0.5;
-        const jitterY = Math.sin(angle) * 0.5;
-
+        // 初期位置: 点の真上 (データ点マーカーと絶対に被らない十分な上部オフセット)
         const origAx = 0;
-        const origAy = -14;
+        const origAy = -(POINT_RADIUS + POINT_CLEARANCE + h / 2); // 約 -23.5px
+
+        // 黄金角に基づく初期微小ジッター
+        const angle = (idx * 2.399963) % (2 * Math.PI);
+        const jitterX = Math.cos(angle) * 2.0;
+        const jitterY = Math.sin(angle) * 2.0;
 
         return {
             idx,
             p,
             px, py,
-            r, w, h,
+            w, h,
             ax: origAx + jitterX,
             ay: origAy + jitterY,
             origAx, origAy,
@@ -3103,10 +3106,11 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
     });
 
     const num = labels.length;
-    const iterations = Math.min(75, Math.max(40, Math.round(num * 1.2)));
+    const iterations = Math.min(140, Math.max(70, Math.round(num * 3.0)));
 
     for (let iter = 0; iter < iterations; iter++) {
-        const cooling = Math.max(0.2, 1 - (iter / iterations) * 0.75);
+        const progress = iter / iterations;
+        const cooling = Math.max(0.12, 1 - progress * 0.72);
 
         // 1. ラベル同士の斥力 (Label-Label Repulsion)
         for (let i = 0; i < num; i++) {
@@ -3122,30 +3126,37 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
                 let dx = curBx - curAx;
                 let dy = curBy - curAy;
 
-                const minDistX = (A.w + B.w) / 2 + 6;
-                const minDistY = (A.h + B.h) / 2 + 4;
+                const reqDistX = (A.w + B.w) / 2 + 6;
+                const reqDistY = (A.h + B.h) / 2 + 5;
 
                 const absDx = Math.abs(dx);
                 const absDy = Math.abs(dy);
 
-                if (absDx < minDistX && absDy < minDistY) {
+                if (absDx < reqDistX && absDy < reqDistY) {
                     if (absDx < 0.001 && absDy < 0.001) {
-                        dx = (i % 2 === 0 ? 1 : -1) * 0.1;
-                        dy = (j % 2 === 0 ? 1 : -1) * 0.1;
+                        dx = (i % 2 === 0 ? 1 : -1) * 0.5;
+                        dy = (j % 2 === 0 ? 1 : -1) * 0.5;
                     }
-                    const overlapX = minDistX - absDx;
-                    const overlapY = minDistY - absDy;
+
+                    const overlapX = reqDistX - absDx;
+                    const overlapY = reqDistY - absDy;
 
                     const signX = (dx >= 0 ? 1 : -1);
                     const signY = (dy >= 0 ? 1 : -1);
 
+                    // 横長ラベル向け：重なりが浅い軸へ優先的に押し出す
+                    const ratioX = overlapX / reqDistX;
+                    const ratioY = overlapY / reqDistY;
+
                     let fx = 0, fy = 0;
-                    if (overlapX < overlapY * 1.3) {
-                        fx = signX * overlapX * 0.45;
-                        fy = signY * overlapY * 0.15;
+                    if (ratioY <= ratioX * 1.2) {
+                        // 上下に分かれる方が早い
+                        fy = signY * overlapY * 0.65;
+                        fx = signX * overlapX * 0.25;
                     } else {
-                        fx = signX * overlapX * 0.15;
-                        fy = signY * overlapY * 0.45;
+                        // 左右に分かれる方が早い
+                        fx = signX * overlapX * 0.65;
+                        fy = signY * overlapY * 0.25;
                     }
 
                     A.vx -= fx;
@@ -3157,35 +3168,54 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
         }
 
         // 2. データ点との斥力 (Label-Point Repulsion)
-        // ※ 他の点(j !== i)との重なりを回避。自分自身の点とは近傍にいて良い。
+        // ※ 自分自身を含め、データ点とラベル矩形が絶対に被らないように強力に斥力をかける
+        const minPointClearance = POINT_RADIUS + POINT_CLEARANCE; // 15px
         for (let i = 0; i < num; i++) {
             const A = labels[i];
             const curAx = A.px + A.ax;
             const curAy = A.py + A.ay;
 
+            const boxLeft = curAx - A.w / 2;
+            const boxRight = curAx + A.w / 2;
+            const boxTop = curAy - A.h / 2;
+            const boxBottom = curAy + A.h / 2;
+
             for (let j = 0; j < num; j++) {
-                if (i === j) continue; // 自分自身の点とは斥力を発生させない
                 const P = labels[j];
 
-                const clampX = Math.max(curAx - A.w / 2, Math.min(curAx + A.w / 2, P.px));
-                const clampY = Math.max(curAy - A.h / 2, Math.min(curAy + A.h / 2, P.py));
+                // 点 P から矩形 A への最短距離点
+                const nearestX = Math.max(boxLeft, Math.min(boxRight, P.px));
+                const nearestY = Math.max(boxTop, Math.min(boxBottom, P.py));
 
-                let dx = clampX - P.px;
-                let dy = clampY - P.py;
-                let dist = Math.sqrt(dx * dx + dy * dy);
+                let dx = nearestX - P.px;
+                let dy = nearestY - P.py;
+                let dist = Math.hypot(dx, dy);
 
-                const minDist = P.r + 5;
-                if (dist < minDist) {
-                    if (dist === 0) {
-                        dx = (Math.random() - 0.5) || 1;
-                        dy = -1;
-                        dist = 1;
+                const isInside = (P.px >= boxLeft && P.px <= boxRight && P.py >= boxTop && P.py <= boxBottom);
+
+                if (isInside) {
+                    // 点が矩形の内部に入り込んでいる場合、最も近い外側へ押し出す
+                    const distToLeft = P.px - boxLeft;
+                    const distToRight = boxRight - P.px;
+                    const distToTop = P.py - boxTop;
+                    const distToBottom = boxBottom - P.py;
+
+                    const minDistSide = Math.min(distToLeft, distToRight, distToTop, distToBottom);
+                    if (minDistSide === distToTop) {
+                        A.vy -= (distToTop + minPointClearance) * 0.95;
+                    } else if (minDistSide === distToBottom) {
+                        A.vy += (distToBottom + minPointClearance) * 0.95;
+                    } else if (minDistSide === distToLeft) {
+                        A.vx -= (distToLeft + minPointClearance) * 0.95;
+                    } else {
+                        A.vx += (distToRight + minPointClearance) * 0.95;
                     }
-                    const push = (minDist - dist);
-                    const fx = (dx / dist) * push * 0.55;
-                    const fy = (dy / dist) * push * 0.55;
-                    A.vx += fx;
-                    A.vy += fy;
+                } else if (dist < minPointClearance) {
+                    const push = (minPointClearance - dist);
+                    const pushX = (dx / (dist || 1)) * push;
+                    const pushY = (dy / (dist || 1)) * push;
+                    A.vx += pushX * 0.85;
+                    A.vy += pushY * 0.85;
                 }
             }
         }
@@ -3196,8 +3226,8 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
             const dAx = A.origAx - A.ax;
             const dAy = A.origAy - A.ay;
 
-            A.vx += dAx * 0.055;
-            A.vy += dAy * 0.055;
+            A.vx += dAx * 0.02;
+            A.vy += dAy * 0.02;
         }
 
         // 4. 移動適用と減衰
@@ -3206,18 +3236,16 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
             A.ax += A.vx * cooling;
             A.ay += A.vy * cooling;
 
-            A.vx *= 0.62;
-            A.vy *= 0.62;
+            A.vx *= 0.54;
+            A.vy *= 0.54;
         }
     }
 
-    const minDisplacement = 8; // 初期位置からの移動量がこの閾値未満なら引き出し線を引かない (ggrepel min.segment.length)
+    // 初期アンカー位置 (origAx, origAy) からの移動量
+    const minDisplacement = 8; // 移動が小さい場合は引き出し線を引かない
 
     return labels.map(lbl => {
-        const displacement = Math.sqrt(
-            (lbl.ax - lbl.origAx) * (lbl.ax - lbl.origAx) + 
-            (lbl.ay - lbl.origAy) * (lbl.ay - lbl.origAy)
-        );
+        const displacement = Math.hypot(lbl.ax - lbl.origAx, lbl.ay - lbl.origAy);
         const showArrow = displacement >= minDisplacement;
 
         return {
@@ -3229,18 +3257,19 @@ function computePlotlyRepelAnnotations(pointItems, scoresX, scoresY, containerWi
             showarrow: showArrow,
             ax: Math.round(lbl.ax),
             ay: Math.round(lbl.ay),
-            arrowcolor: 'rgba(100, 116, 139, 0.55)',
+            arrowcolor: 'rgba(100, 116, 139, 0.65)',
             arrowwidth: 1,
             arrowhead: 0,
-            standoff: 4,
+            standoff: 6, // データ点マーカーの外側で引き出し線をきれいに停止
             font: {
                 size: 11,
                 color: lbl.p.cluster === -1 ? '#64748b' : '#1e293b'
             },
-            bgcolor: 'rgba(255, 255, 255, 0.88)',
-            bordercolor: 'rgba(203, 213, 225, 0.7)',
-            borderwidth: 0.5,
-            borderpad: 2
+            // 白抜きの枠を撤廃！文字のみをクリアに描画
+            bgcolor: 'transparent',
+            bordercolor: 'transparent',
+            borderwidth: 0,
+            borderpad: 1
         };
     });
 }
