@@ -3499,6 +3499,7 @@ function updatePlot() {
         annotations.push(...repelAnnotations);
     }
     
+    let vecData = [];
     if (showVectors) {
         const activeFeatures = getActiveFeatures();
         
@@ -3539,7 +3540,7 @@ function updatePlot() {
             });
             
         } else {
-            const vecData = [];
+            vecData = [];
             for (let i = 0; i < activeFeatures.length; i++) {
                 const lx = loadingsX[i] * scalingFactor;
                 const ly = loadingsY[i] * scalingFactor;
@@ -3638,7 +3639,7 @@ function updatePlot() {
     
     let layout = {
         title: customTitle,
-        margin: {l: 60, r: 50, b: 70, t: 50}
+        margin: {l: 60, r: 50, b: (!is3D && enableClustering) ? 90 : 70, t: 50}
     };
     
     if (is3D) {
@@ -3649,18 +3650,57 @@ function updatePlot() {
         };
         layout.margin = {l: 0, r: 0, b: 0, t: 50};
     } else {
+        // クラスタリングON/OFFに関わらず、常にデータ点（およびベクトル）を基準にした同一の表示範囲を計算
+        let minX = Math.min(...scoresX);
+        let maxX = Math.max(...scoresX);
+        let minY = Math.min(...scoresY);
+        let maxY = Math.max(...scoresY);
+
+        if (showVectors && vecData.length > 0) {
+            for (let k = 0; k < vecData.length; k++) {
+                minX = Math.min(minX, vecData[k].lx);
+                maxX = Math.max(maxX, vecData[k].lx);
+                minY = Math.min(minY, vecData[k].ly);
+                maxY = Math.max(maxY, vecData[k].ly);
+            }
+        }
+
+        const spanX = (maxX - minX) || 2;
+        const spanY = (maxY - minY) || 2;
+        const padX = spanX * 0.08;
+        const padY = spanY * 0.08;
+
         layout.hovermode = 'closest';
         layout.xaxis = { 
             title: `PC${xIdx+1} (${varX}%)<br><span style="font-size:0.85em; color:gray">主な寄与: ${topX}</span>`, 
-            zeroline: true 
+            zeroline: true,
+            range: [minX - padX, maxX + padX],
+            autorange: false
         };
         layout.yaxis = { 
             title: `PC${yIdx+1} (${varY}%)<br><span style="font-size:0.85em; color:gray">主な寄与: ${topY}</span>`, 
-            zeroline: true 
+            zeroline: true,
+            range: [minY - padY, maxY + padY],
+            autorange: false
         };
         layout.annotations = annotations;
         if (clusterShapes.length > 0) {
             layout.shapes = clusterShapes;
+        }
+
+        // 凡例の表示制御:
+        // 凡例が右側に配置されるとプロット領域の横幅が削られて描画領域が変わってしまうため、
+        // クラスタリングON時は下部中央に横並び（horizontal）で配置し、左右プロット幅を完全維持する
+        if (enableClustering) {
+            layout.legend = {
+                orientation: 'h',
+                x: 0.5,
+                xanchor: 'center',
+                y: -0.22,
+                yanchor: 'top'
+            };
+        } else {
+            layout.showlegend = false;
         }
     }
     
